@@ -1,5 +1,10 @@
 # codesurface
 
+[![PyPI Version](https://img.shields.io/pypi/v/codesurface.svg)](https://pypi.org/project/codesurface/)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/codesurface.svg)](https://pypi.org/project/codesurface/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+
 **MCP server that indexes a C# codebase's public API at startup and serves it via compact tool responses — saving tokens vs reading source files.**
 
 Parses all `.cs` files, extracts public classes/methods/properties/fields/events, and serves them through 5 MCP tools. Works with Claude Code, Cursor, Windsurf, or any MCP-compatible AI tool.
