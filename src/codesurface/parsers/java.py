@@ -293,10 +293,8 @@ def _parse_java_file(path: Path, base_dir: Path) -> list[dict]:
                     class_stack.pop()
                 class_stack.append((type_name, kind, brace_depth))
 
-                # Only record public types (or top-level classes which are implicitly the file's type)
+                # Only record public types; skip package-private (no modifier)
                 is_public = bool(re.match(r"^\s*public\s+", line))
-                # Top-level class (brace_depth == 0) without explicit modifier is package-private
-                # but we still index it if it's the only type -- however, plan says skip package-private
                 if is_public:
                     fqn = _make_fqn(package, class_stack)
                     doc = _look_back_for_javadoc(lines, i)
