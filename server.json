@@ -1,19 +1,24 @@
 {
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Codeturion/codesurface",
   "version": "0.4.0",
-  "description": "MCP server that indexes your codebase's public API at startup and serves it via compact tool responses. Supports C#, Java, Python, and TypeScript.",
+  "description": "Indexes your codebase's public API and serves it via compact MCP tool responses.",
   "repository": {
     "url": "https://github.com/Codeturion/codesurface",
     "source": "github"
   },
   "packages": [
     {
-      "registry_name": "pypi",
-      "name": "codesurface",
-      "version": "0.4.0"
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "codesurface",
+      "version": "0.4.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
     }
   ],
-  "remotes": [],
   "tools": [
     {
       "name": "search",
