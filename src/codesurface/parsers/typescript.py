@@ -130,8 +130,8 @@ _ARROW_FUNC_RE = re.compile(
     r"=\s*(?:async\s+)?\("
 )
 
-# Overload signature (ends with ; not {)
-_OVERLOAD_END_RE = re.compile(r"\)\s*:\s*[^{]+;\s*$")
+# Overload signature: has return type but no { (ends with ; or just type)
+_OVERLOAD_END_RE = re.compile(r"\)\s*:\s*[^{]+$")
 
 # Skip names that could be false positives
 _SKIP_NAMES = frozenset({
@@ -501,7 +501,16 @@ def _parse_ts_file(path: Path, base_dir: Path) -> list[dict]:
 
         i += 1
 
-    return records
+    # Deduplicate within file: getter/setter pairs, declaration merging
+    # (export const Foo + export type Foo), etc. Keep first occurrence.
+    unique: list[dict] = []
+    seen: set[str] = set()
+    for rec in records:
+        fqn = rec["fqn"]
+        if fqn not in seen:
+            seen.add(fqn)
+            unique.append(rec)
+    return unique
 
 
 # --- Class member parsing ---
