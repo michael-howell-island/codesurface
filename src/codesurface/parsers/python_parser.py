@@ -731,25 +731,5 @@ def _method_fqn(base_fqn: str, name: str, params_str: str) -> str:
     return f"{base_fqn}.{name}"
 
 
-def _build_record(
-    fqn: str,
-    namespace: str,
-    class_name: str,
-    member_name: str,
-    member_type: str,
-    signature: str,
-    summary: str,
-    file_path: str,
-) -> dict:
-    return {
-        "fqn": fqn,
-        "namespace": namespace,
-        "class_name": class_name,
-        "member_name": member_name,
-        "member_type": member_type,
-        "signature": signature,
-        "summary": summary,
-        "params_json": [],
-        "returns_text": "",
-        "file_path": file_path,
-    }
+def _build_record(**kwargs) -> dict:
+    return kwargs
