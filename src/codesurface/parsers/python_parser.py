@@ -42,9 +42,14 @@ _CONST_RE = re.compile(
     r"^([A-Z][A-Z0-9_]*)\s*(?::\s*[^=]+)?\s*="
 )
 
-# Module-level typed variable: name: Type = value
-_TYPED_VAR_RE = re.compile(
-    r"^(\w+)\s*:\s*(.+?)\s*="
+# Class-level typed field: name: Type  or  name: Type = value
+_CLASS_FIELD_RE = re.compile(
+    r"^\s+(\w+)\s*:\s*(.+?)(?:\s*=.*)?$"
+)
+
+# Enum member: name = value (simple assignment inside class body)
+_ENUM_MEMBER_RE = re.compile(
+    r"^\s+(\w+)\s*=\s*(.+)$"
 )
 
 # Decorator line
@@ -109,7 +114,7 @@ def _parse_py_file(path: Path, base_dir: Path) -> list[dict]:
 
     # Collect decorators, then parse declarations
     i = 0
-    class_stack: list[tuple[str, int]] = []  # (class_name, indent_level)
+    class_stack: list[tuple[str, int, str]] = []  # (class_name, indent_level, bases)
     pending_decorators: list[str] = []
 
     while i < len(lines):
@@ -142,7 +147,7 @@ def _parse_py_file(path: Path, base_dir: Path) -> list[dict]:
             class_name = cls_match.group(2)
             bases = cls_match.group(3) or ""
 
-            class_stack.append((class_name, indent))
+            class_stack.append((class_name, indent, bases))
 
             if _is_public(class_name, all_names):
                 fqn = f"{module}.{class_name}" if module else class_name
@@ -279,6 +284,68 @@ def _parse_py_file(path: Path, base_dir: Path) -> list[dict]:
             i = end_line + 1
             continue
 
+        # Class-level fields and enum members
+        if class_stack and line[0].isspace():
+            current_class = class_stack[-1][0]
+            current_indent = class_stack[-1][1]
+            current_bases = class_stack[-1][2]
+            indent = _indent_level(line)
+
+            # Only direct children (one indent level deeper than class)
+            if indent > current_indent:
+                base_fqn = f"{module}.{current_class}" if module else current_class
+                is_enum = _is_enum_class(current_bases)
+
+                # Enum member: name = value
+                if is_enum:
+                    enum_match = _ENUM_MEMBER_RE.match(line)
+                    if enum_match:
+                        member_name = enum_match.group(1)
+                        if not member_name.startswith("_") and member_name not in (
+                            "class", "def", "return", "pass", "if", "else",
+                        ):
+                            records.append(_build_record(
+                                fqn=f"{base_fqn}.{member_name}",
+                                namespace=module,
+                                class_name=current_class,
+                                member_name=member_name,
+                                member_type="field",
+                                signature=f"{current_class}.{member_name}",
+                                summary="",
+                                file_path=rel_path,
+                            ))
+                            pending_decorators = []
+                            i += 1
+                            continue
+
+                # Typed class field: name: Type = value  or  name: Type
+                field_match = _CLASS_FIELD_RE.match(line)
+                if field_match:
+                    field_name = field_match.group(1)
+                    field_type = field_match.group(2).strip()
+                    # Skip if it looks like a keyword or starts with underscore
+                    if (
+                        not field_name.startswith("_")
+                        and field_name not in ("class", "def", "return", "pass", "if", "else")
+                        and _is_public(current_class, all_names)
+                    ):
+                        # Clean trailing = or Field(...) from type
+                        field_type = re.sub(r"\s*=\s*$", "", field_type).strip()
+                        sig = f"{field_type} {field_name}"
+                        records.append(_build_record(
+                            fqn=f"{base_fqn}.{field_name}",
+                            namespace=module,
+                            class_name=current_class,
+                            member_name=field_name,
+                            member_type="field",
+                            signature=sig,
+                            summary="",
+                            file_path=rel_path,
+                        ))
+                        pending_decorators = []
+                        i += 1
+                        continue
+
         # Module-level constant (UPPER_CASE) -- only at indent 0, outside classes
         if not class_stack and not line[0].isspace():
             const_match = _CONST_RE.match(stripped)
@@ -309,6 +376,18 @@ def _parse_py_file(path: Path, base_dir: Path) -> list[dict]:
 def _indent_level(line: str) -> int:
     """Return the indentation level (number of leading spaces)."""
     return len(line) - len(line.lstrip())
+
+
+def _is_enum_class(bases: str) -> bool:
+    """Check if a class inherits from Enum (or IntEnum, Flag, etc.)."""
+    if not bases:
+        return False
+    # Split bases by comma and check each
+    for base in bases.split(","):
+        base = base.strip().rsplit(".", 1)[-1]  # strip module prefix
+        if base in ("Enum", "IntEnum", "Flag", "IntFlag", "StrEnum"):
+            return True
+    return False
 
 
 def _is_public(name: str, all_names: set[str] | None) -> bool:
