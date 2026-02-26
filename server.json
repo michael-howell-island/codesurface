@@ -1,0 +1,39 @@
+{
+  "name": "io.github.Codeturion/codesurface",
+  "version": "0.4.0",
+  "description": "MCP server that indexes your codebase's public API at startup and serves it via compact tool responses. Supports C#, Java, Python, and TypeScript.",
+  "repository": {
+    "url": "https://github.com/Codeturion/codesurface",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registry_name": "pypi",
+      "name": "codesurface",
+      "version": "0.4.0"
+    }
+  ],
+  "remotes": [],
+  "tools": [
+    {
+      "name": "search",
+      "description": "Search the indexed API by keyword. Find classes, methods, properties, fields, and events."
+    },
+    {
+      "name": "get_signature",
+      "description": "Look up the exact signature of an API member by name or FQN."
+    },
+    {
+      "name": "get_class",
+      "description": "Get a complete reference card for a class with all public members."
+    },
+    {
+      "name": "get_stats",
+      "description": "Get a quick overview of the indexed codebase."
+    },
+    {
+      "name": "reindex",
+      "description": "Incrementally update the index by re-parsing only changed, new, or deleted files."
+    }
+  ]
+}
