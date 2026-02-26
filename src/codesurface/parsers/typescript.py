@@ -162,7 +162,9 @@ class TypeScriptParser(BaseParser):
                     continue
                 try:
                     records.extend(self.parse_file(f, directory))
-                except Exception:
+                except Exception as e:
+                    import sys
+                    print(f"codesurface: failed to parse {f}: {e}", file=sys.stderr)
                     continue
         return records
 
@@ -578,8 +580,8 @@ def _try_parse_class_member(
         full_sig, _ = _collect_signature(lines, idx)
         return_type = _extract_return_type(full_sig) if acc_kind == "get" else ""
         doc = _look_back_for_jsdoc(lines, idx)
-        is_static = "static" in stripped.split(acc_kind)[0]
-        prefix = "static " if is_static else ""
+        mods = _extract_modifiers(stripped, acc_kind)
+        prefix = "static " if "static" in mods else ""
         ret = f": {return_type}" if return_type else ""
         sig = f"{prefix}{prop_name}{ret}"
         return _build_record(
@@ -612,15 +614,13 @@ def _try_parse_class_member(
             return_type = _extract_return_type(full_sig)
             doc = _look_back_for_jsdoc(lines, idx)
 
-            is_static = "static " in stripped[:stripped.index(meth_name)]
-            is_abstract = "abstract " in stripped[:stripped.index(meth_name)]
-            is_async = "async " in stripped[:stripped.index(meth_name)]
+            mods = _extract_modifiers(stripped, meth_name)
             prefix = ""
-            if is_static:
+            if "static" in mods:
                 prefix += "static "
-            if is_abstract:
+            if "abstract" in mods:
                 prefix += "abstract "
-            if is_async:
+            if "async" in mods:
                 prefix += "async "
             ret = f": {return_type}" if return_type else ""
             sig = f"{prefix}{meth_name}({params_str}){ret}"
@@ -646,16 +646,15 @@ def _try_parse_class_member(
         if "(" in stripped:
             return None
         doc = _look_back_for_jsdoc(lines, idx)
-        is_static = "static " in stripped[:stripped.index(field_name)] if field_name in stripped else False
-        is_readonly = "readonly " in stripped[:stripped.index(field_name)] if field_name in stripped else False
+        mods = _extract_modifiers(stripped, field_name)
 
         # Extract type
         field_type = _extract_field_type(stripped, field_name)
 
         prefix = ""
-        if is_static:
+        if "static" in mods:
             prefix += "static "
-        if is_readonly:
+        if "readonly" in mods:
             prefix += "readonly "
         type_part = f": {field_type}" if field_type else ""
         sig = f"{prefix}{field_name}{type_part}"
@@ -852,11 +851,12 @@ def _collect_signature(lines: list[str], start: int) -> tuple[str, int]:
     sig = lines[start]
     i = start
 
-    depth = sig.count("(") - sig.count(")")
+    _, depth = _count_braces_and_parens(sig)
     while depth > 0 and i + 1 < len(lines):
         i += 1
         sig += " " + lines[i].strip()
-        depth += lines[i].count("(") - lines[i].count(")")
+        _, paren_delta = _count_braces_and_parens(lines[i])
+        depth += paren_delta
 
     return sig, i
 
@@ -1043,6 +1043,22 @@ def _count_braces_and_parens(line: str) -> tuple[int, int]:
 
 
 # --- Visibility ---
+
+def _extract_modifiers(stripped: str, name: str) -> set[str]:
+    """Extract modifier keywords appearing before *name* in a stripped line.
+
+    Splits text before the first occurrence of *name* into words and returns
+    those that are known TypeScript modifiers.  This replaces fragile
+    ``"static " in text`` substring checks that can false-positive on names
+    containing the modifier string.
+    """
+    _KNOWN_MODS = {"static", "abstract", "async", "readonly", "override", "declare"}
+    idx = stripped.find(name)
+    if idx <= 0:
+        return set()
+    prefix = stripped[:idx]
+    return {w for w in prefix.split() if w in _KNOWN_MODS}
+
 
 def _is_private_member(stripped: str) -> bool:
     """Check if a class member line is private or protected."""
