@@ -1,7 +1,10 @@
+<!-- mcp-name: io.github.Codeturion/codesurface -->
+
 # codesurface
 
 [![PyPI Version](https://img.shields.io/pypi/v/codesurface.svg)](https://pypi.org/project/codesurface/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/codesurface.svg)](https://pypi.org/project/codesurface/)
+[![MCP Registry](https://img.shields.io/badge/MCP-Registry-green)](https://registry.modelcontextprotocol.io/servers/io.github.Codeturion/codesurface)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Blog Post](https://img.shields.io/badge/Blog-Benchmark%20Write--up-blue)](https://www.codeturion.me/blog/reducing-llm-agent-hallucinations-through-constrained-api-retrieval)
@@ -10,7 +13,7 @@
 
 Parses source files, extracts public classes/methods/properties/fields/events, and serves them through 5 MCP tools. Works with Claude Code, Cursor, Windsurf, or any MCP-compatible AI tool.
 
-**Supported languages:** C# (`.cs`), Python (`.py`), TypeScript/TSX (`.ts`, `.tsx`)
+**Supported languages:** C# (`.cs`), Java (`.java`), Python (`.py`), TypeScript/TSX (`.ts`, `.tsx`)
 
 ## Quick Start
 
@@ -31,7 +34,7 @@ Then add to your `.mcp.json`:
 }
 ```
 
-Point `--project` at any directory containing supported source files — a Unity `Assets/Scripts` folder, a .NET `src/` tree, a Node.js/React project, a Python package, etc. Languages are auto-detected.
+Point `--project` at any directory containing supported source files — a Unity `Assets/Scripts` folder, a Spring Boot project, a .NET `src/` tree, a Node.js/React project, a Python package, etc. Languages are auto-detected.
 
 Restart your AI tool and ask: *"What methods does MyService have?"*
 
@@ -50,8 +53,10 @@ Restart your AI tool and ask: *"What methods does MyService have?"*
 | Project | Language | Files | Records | Time |
 |---------|----------|-------|---------|------|
 | [vscode](https://github.com/microsoft/vscode) | TypeScript | 6,611 | 88,293 | 9.3s |
+| [Paper](https://github.com/PaperMC/Paper) | Java | 2,909 | 33,973 | 2.3s |
 | [langchain](https://github.com/langchain-ai/langchain) | Python | 1,880 | 12,418 | 1.1s |
 | [pydantic](https://github.com/pydantic/pydantic) | Python | 365 | 9,648 | 0.3s |
+| [guava](https://github.com/google/guava) | Java | 891 | 8,377 | 2.4s |
 | [immich](https://github.com/immich-app/immich) | TypeScript | 919 | 7,957 | 0.6s |
 | [fastapi](https://github.com/tiangolo/fastapi) | Python | 881 | 5,713 | 0.5s |
 | [ant-design](https://github.com/ant-design/ant-design) | TypeScript | 2,947 | 5,452 | 0.9s |
@@ -139,6 +144,7 @@ codesurface/
 │   └── parsers/
 │       ├── base.py         # BaseParser ABC
 │       ├── csharp.py       # C# parser
+│       ├── java.py         # Java parser
 │       ├── python_parser.py # Python parser
 │       └── typescript.py   # TypeScript/TSX parser
 ├── pyproject.toml
@@ -151,7 +157,7 @@ codesurface/
 <summary>Troubleshooting</summary>
 
 **"No codebase indexed"**
-- Ensure `--project` points to a directory containing supported source files (`.cs`, `.py`, `.ts`, `.tsx`)
+- Ensure `--project` points to a directory containing supported source files (`.cs`, `.java`, `.py`, `.ts`, `.tsx`)
 - The server indexes at startup — check stderr for the "Indexed N records" message
 
 **Server won't start**
