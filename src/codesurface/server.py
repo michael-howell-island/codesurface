@@ -22,7 +22,7 @@ mcp = FastMCP(
 _conn = None
 _project_path: Path | None = None
 _file_mtimes: dict[str, float] = {}  # rel_path → mtime
-_index_fresh: bool = True  # True = index is up-to-date, skip reindex on miss
+_index_fresh: bool = True  # True = checked for changes since last hit; skip auto-reindex
 
 
 def _index_full(project_path: Path, language: str | None = None) -> str:
@@ -70,11 +70,14 @@ def _index_full(project_path: Path, language: str | None = None) -> str:
     )
 
 
-def _index_incremental(project_path: Path) -> str:
-    """Re-parse only changed/new/deleted files. Updates existing DB in-place."""
+def _index_incremental(project_path: Path) -> tuple[str, bool]:
+    """Re-parse only changed/new/deleted files. Updates existing DB in-place.
+
+    Returns (message, changed) where changed indicates if any files were updated.
+    """
     global _file_mtimes
     if _conn is None:
-        return _index_full(project_path)
+        return _index_full(project_path), True
 
     t0 = time.perf_counter()
 
@@ -106,7 +109,8 @@ def _index_incremental(project_path: Path) -> str:
         stats = db.get_stats(_conn)
         return (
             f"No changes detected ({len(current)} files scanned in {elapsed:.3f}s). "
-            f"Index: {stats['total']} records"
+            f"Index: {stats['total']} records",
+            False,
         )
 
     # Remove stale records
@@ -151,7 +155,7 @@ def _index_incremental(project_path: Path) -> str:
         parts.append(f"  removed {len(deleted)} file(s)")
     parts.append(f"  parsed {len(new_records)} records from {len(dirty)} file(s)")
     parts.append(f"  index total: {stats['total']} records from {stats.get('files', 0)} files")
-    return "\n".join(parts)
+    return "\n".join(parts), True
 
 
 def _auto_reindex() -> bool:
@@ -162,10 +166,9 @@ def _auto_reindex() -> bool:
     global _index_fresh
     if _index_fresh or _project_path is None or _conn is None:
         return False
-    result = _index_incremental(_project_path)
+    _msg, changed = _index_incremental(_project_path)
     _index_fresh = True
-    # If "No changes detected" → index was already current, no retry needed
-    return not result.startswith("No changes detected")
+    return changed
 
 
 def _format_record(r: dict) -> str:
@@ -272,7 +275,7 @@ def get_signature(name: str) -> str:
         if record:
             return _format_record(record)
 
-        # 2. Prefix match (overloads or partial FQN)
+        # 2. Substring match (overloads or partial FQN)
         rows = _conn.execute(
             "SELECT * FROM api_records WHERE fqn LIKE ? ORDER BY fqn",
             (f"%{name}%",),
@@ -441,7 +444,8 @@ def reindex() -> str:
         return f"Project path not found: {_project_path}"
 
     _index_fresh = True
-    return _index_incremental(_project_path)
+    msg, _changed = _index_incremental(_project_path)
+    return msg
 
 
 def main():
