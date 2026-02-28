@@ -20,18 +20,14 @@ Parses source files, extracts public classes/methods/properties/fields/events, a
 
 ## Quick Start
 
-```bash
-pip install codesurface
-```
-
-Then add to your `.mcp.json`:
+Add to your `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "codesurface": {
-      "command": "codesurface",
-      "args": ["--project", "/path/to/your/src"]
+      "command": "uvx",
+      "args": ["codesurface", "--project", "/path/to/your/src"]
     }
   }
 }
@@ -144,26 +140,36 @@ Even with follow-up reads for implementation detail, the hybrid MCP + targeted R
 
 See [workflow-benchmark.md](workflow-benchmark.md) for the full step-by-step analysis across all languages.
 
-## Setup Details
+## Multiple Projects
 
-<details>
-<summary>Claude Code configuration</summary>
+Each `--project` flag indexes one directory. To index multiple codebases, run separate instances with different server names:
 
-Add to `<project>/.mcp.json`:
-
-**Using uv (recommended):**
 ```json
 {
   "mcpServers": {
-    "codesurface": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/codesurface", "codesurface", "--project", "/path/to/your/src"]
+    "codesurface-backend": {
+      "command": "uvx",
+      "args": ["codesurface", "--project", "/path/to/backend/src"]
+    },
+    "codesurface-frontend": {
+      "command": "uvx",
+      "args": ["codesurface", "--project", "/path/to/frontend/src"]
     }
   }
 }
 ```
 
+Each instance gets its own in-memory index and tools. The AI agent sees both and can query across projects.
+
+## Setup Details
+
+<details>
+<summary>Alternative installation methods</summary>
+
 **Using pip install:**
+```bash
+pip install codesurface
+```
 ```json
 {
   "mcpServers": {
