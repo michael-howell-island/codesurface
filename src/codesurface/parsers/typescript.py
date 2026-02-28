@@ -591,7 +591,7 @@ def _try_parse_class_member(
         prop_name = acc_match.group(2)
         if prop_name in _SKIP_NAMES:
             return None
-        full_sig, _ = _collect_signature(lines, idx)
+        full_sig, end_i = _collect_signature(lines, idx)
         return_type = _extract_return_type(full_sig) if acc_kind == "get" else ""
         doc = _look_back_for_jsdoc(lines, idx)
         mods = _extract_modifiers(stripped, acc_kind)
@@ -608,7 +608,7 @@ def _try_parse_class_member(
             summary=doc,
             file_path=file_path,
             line_start=idx + 1,
-            line_end=idx + 1,
+            line_end=end_i + 1,
         )
 
     # Method (has parentheses)
@@ -718,7 +718,7 @@ def _try_parse_interface_member(
             meth_name = meth_match.group(1)
             if meth_name in _SKIP_NAMES:
                 return None
-            full_sig, _ = _collect_signature(lines, idx)
+            full_sig, end_i = _collect_signature(lines, idx)
             params_str = _extract_params(full_sig)
             return_type = _extract_return_type(full_sig)
             doc = _look_back_for_jsdoc(lines, idx)
@@ -735,7 +735,7 @@ def _try_parse_interface_member(
                 summary=doc,
                 file_path=file_path,
                 line_start=idx + 1,
-                line_end=idx + 1,
+                line_end=end_i + 1,
             )
 
     # Property: name: Type; or readonly name: Type;

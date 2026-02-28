@@ -399,7 +399,7 @@ def _parse_py_file(path: Path, base_dir: Path) -> list[dict]:
                             summary="",
                             file_path=rel_path,
                             line_start=i + 1,
-                            line_end=i + 1,
+                            line_end=i + skip_lines + 1,
                         ))
                         pending_decorators = []
                         i += 1 + skip_lines
