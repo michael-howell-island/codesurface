@@ -4,7 +4,10 @@
 
 [![PyPI Version](https://img.shields.io/pypi/v/codesurface.svg)](https://pypi.org/project/codesurface/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/codesurface.svg)](https://pypi.org/project/codesurface/)
-[![MCP Registry](https://img.shields.io/badge/MCP-Registry-green)](https://registry.modelcontextprotocol.io/servers/io.github.Codeturion/codesurface)
+[![MCP Registry](https://img.shields.io/badge/MCP-Registry-green)](https://registry.modelcontextprotocol.io/?q=codesurface)
+[![GitHub Stars](https://img.shields.io/github/stars/Codeturion/codesurface)](https://github.com/Codeturion/codesurface)
+[![GitHub Last Commit](https://img.shields.io/github/last-commit/Codeturion/codesurface)](https://github.com/Codeturion/codesurface)
+[![Languages](https://img.shields.io/badge/languages-C%23%20%7C%20TS%20%7C%20Java%20%7C%20Go%20%7C%20Python-blueviolet)](https://github.com/Codeturion/codesurface)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Blog Post](https://img.shields.io/badge/Blog-Benchmark%20Write--up-blue)](https://www.codeturion.me/blog/reducing-llm-agent-hallucinations-through-constrained-api-retrieval)
