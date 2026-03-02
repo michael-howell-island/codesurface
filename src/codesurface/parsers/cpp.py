@@ -47,8 +47,8 @@ _CPP_KEYWORDS = frozenset({
 # Regex patterns
 # ---------------------------------------------------------------------------
 
-# Export/API macros: SFML_API, IMGUI_API, MY_EXPORT, etc.
-_EXPORT_MACRO_RE = re.compile(r"\b\w+_(?:API|EXPORT|DLL|SHARED)\b")
+# Export/API macros: SFML_API, IMGUI_API, MY_EXPORT, CV_EXPORTS, etc.
+_EXPORT_MACRO_RE = re.compile(r"\b\w+_(?:API|EXPORTS?|DLL|SHARED)\b")
 
 # Namespace: namespace foo { or namespace foo::bar {
 _NAMESPACE_RE = re.compile(
@@ -68,7 +68,7 @@ _ACCESS_RE = re.compile(r"^\s*(public|protected|private)\s*:")
 _CLASS_RE = re.compile(
     r"^\s*(?:template\s*<[^>]*>\s*)?"       # optional template<...>
     r"(class|struct|union)\s+"
-    r"(?:\w+_(?:API|EXPORT|DLL|SHARED)\s+)?"  # optional export macro
+    r"(?:\w+_(?:API|EXPORTS?|DLL|SHARED)\s+)?"  # optional export macro
     r"(\w+)"                                 # class name
     r"(?:\s+final)?"                         # optional final
     r"(.*)"                                  # rest: inheritance, {, ;
@@ -77,7 +77,7 @@ _CLASS_RE = re.compile(
 # Forward declaration: class Foo; or struct Foo;
 _FORWARD_DECL_RE = re.compile(
     r"^\s*(?:class|struct|union)\s+"
-    r"(?:\w+_(?:API|EXPORT|DLL|SHARED)\s+)?"
+    r"(?:\w+_(?:API|EXPORTS?|DLL|SHARED)\s+)?"
     r"\w+\s*;"
 )
 
@@ -118,7 +118,7 @@ _FUNC_RE = re.compile(
     r"^\s*"
     r"((?:(?:static|virtual|inline|explicit|constexpr|consteval|"
     r"friend|extern|nodiscard|\[\[nodiscard\]\]|"
-    r"\w+_(?:API|EXPORT|DLL|SHARED))\s+)*)"  # leading qualifiers
+    r"\w+_(?:API|EXPORTS?|DLL|SHARED))\s+)*)"  # leading qualifiers
     r"([\w:*&<>,\s]+?)\s+"                   # return type
     r"(\w+)"                                 # function/method name
     r"\s*\("                                 # open paren
@@ -128,7 +128,7 @@ _FUNC_RE = re.compile(
 _CTOR_RE = re.compile(
     r"^\s*"
     r"((?:(?:explicit|inline|constexpr|consteval|"
-    r"\w+_(?:API|EXPORT|DLL|SHARED))\s+)*)"  # optional qualifiers
+    r"\w+_(?:API|EXPORTS?|DLL|SHARED))\s+)*)"  # optional qualifiers
     r"(\w+)"                                 # class name (must match current)
     r"\s*\("                                 # open paren
 )
@@ -145,7 +145,7 @@ _DTOR_RE = re.compile(
 _OPERATOR_RE = re.compile(
     r"^\s*"
     r"((?:(?:static|virtual|inline|explicit|constexpr|friend|"
-    r"\w+_(?:API|EXPORT|DLL|SHARED))\s+)*)"  # leading qualifiers
+    r"\w+_(?:API|EXPORTS?|DLL|SHARED))\s+)*)"  # leading qualifiers
     r"([\w:*&<>,\s]*?)\s*"                   # return type (may be empty for conversion)
     r"(operator\s*(?:\(\)|"                   # operator() — call operator
     r"\[\]|"                                  # operator[] — subscript
@@ -169,6 +169,15 @@ _FIELD_RE = re.compile(
     r"(?:\s*(?:=\s*[^;]+|{[^}]*}|\[[^\]]*\]))?"  # optional init
     r"\s*;"
 )
+
+# Macro-wrapped class: ATTRIBUTE_ALIGNED16(class) or MY_MACRO(struct)
+# The class/struct keyword is inside a macro call, name comes on next line
+_MACRO_CLASS_RE = re.compile(
+    r"^\s*\w+\s*\(\s*(class|struct|union)\s*\)\s*$"
+)
+
+# Bare class name on its own line (follows a MACRO(class) line)
+_BARE_NAME_RE = re.compile(r"^\s*(\w+)\s*$")
 
 # Template prefix: template<...> (possibly multi-line)
 _TEMPLATE_RE = re.compile(r"^\s*template\s*<")
@@ -241,6 +250,13 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
     in_enum: str = ""           # enum name if inside enum body
     enum_class_name: str = ""   # owning class for the enum, if any
     enum_brace_depth = -1
+    pending_enum: str = ""      # enum name when { is on next line
+    pending_enum_class: str = ""
+    # Deferred class push: when class decl has no { on its line
+    # Stored as [name, kind, inheritance, decl_line_idx, already_emitted]
+    pending_class: list | None = None
+    # MACRO(class) on previous line — kind stored, waiting for name on next line
+    pending_macro_class_kind: str = ""
 
     i = 0
     while i < len(lines):
@@ -295,6 +311,81 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
         # Count braces
         brace_delta = _count_braces(line)
         new_depth = brace_depth + brace_delta
+
+        # --- MACRO(class) pattern (e.g. ATTRIBUTE_ALIGNED16(class)) ---
+        if pending_macro_class_kind:
+            # Expecting the class name on this line
+            bare_m = _BARE_NAME_RE.match(stripped)
+            if bare_m:
+                macro_name = bare_m.group(1)
+                if macro_name not in _CPP_KEYWORDS:
+                    # Treat as class declaration — defer push until {
+                    pending_class = [macro_name, pending_macro_class_kind, "", i, False]
+                    pending_macro_class_kind = ""
+                    brace_depth = new_depth
+                    i += 1
+                    continue
+            pending_macro_class_kind = ""
+            # Fall through to normal parsing
+
+        macro_class_m = _MACRO_CLASS_RE.match(stripped)
+        if macro_class_m:
+            pending_macro_class_kind = macro_class_m.group(1)
+            brace_depth = new_depth
+            i += 1
+            continue
+
+        # --- Deferred class push: previous class decl had no { ---
+        if pending_class and "{" in line:
+            pc_name, pc_kind, pc_inherit, pc_decl_line, pc_emitted = pending_class
+            default_access = "public" if pc_kind in ("struct", "union") else "private"
+            class_stack.append([pc_name, pc_kind, brace_depth, default_access])
+            # Emit type record for the deferred class (only if not already emitted)
+            is_pub = _is_public(class_stack[:-1])  # check enclosing context
+            if not pc_emitted and is_pub and pc_name not in _CPP_KEYWORDS:
+                ns = _build_ns(namespace_stack)
+                owning_class = class_stack[-2][0] if len(class_stack) > 1 else ""
+                doc = _look_back_for_doc(lines, pc_decl_line)
+                sig = f"{pc_kind} {pc_name}"
+                if pc_inherit:
+                    sig += f" : {pc_inherit}"
+                if pending_template:
+                    sig = pending_template + " " + sig
+                fqn_parts = [p for p in [ns, owning_class, pc_name] if p]
+                fqn = "::".join(fqn_parts)
+                records.append(_build_record(
+                    fqn=fqn,
+                    namespace=ns,
+                    class_name=owning_class or pc_name,
+                    member_name="" if not owning_class else pc_name,
+                    member_type="type",
+                    signature=sig,
+                    summary=doc.get("brief", ""),
+                    file_path=rel_path,
+                    line_start=pc_decl_line + 1,
+                    line_end=pc_decl_line + 1,
+                ))
+            pending_class = None
+            pending_template = ""
+            brace_depth = new_depth
+            i += 1
+            continue
+
+        # --- Deferred enum push: previous enum decl had no { ---
+        if pending_enum:
+            if "{" in stripped and stripped.startswith("{"):
+                in_enum = pending_enum
+                enum_class_name = pending_enum_class
+                enum_brace_depth = brace_depth
+                pending_enum = ""
+                pending_enum_class = ""
+                brace_depth = new_depth
+                i += 1
+                continue
+            else:
+                # Next line wasn't a standalone { — cancel deferred enum
+                pending_enum = ""
+                pending_enum_class = ""
 
         # --- Template accumulation ---
         if _TEMPLATE_RE.match(line) and not _has_declaration_after_template(stripped):
@@ -417,6 +508,17 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
         # Determine if we're in a public context
         is_public = _is_public(class_stack)
 
+        # Determine if we're at declaration level (not inside a function body)
+        # Class members: depth == class_depth + 1
+        # Namespace-level: depth == namespace_depth + 1 (or 0 if no namespace)
+        # Deeper means we're inside a function body — skip declarations
+        if class_stack:
+            at_decl_level = brace_depth == class_stack[-1][2] + 1
+        elif namespace_stack:
+            at_decl_level = brace_depth == namespace_stack[-1][1] + 1
+        else:
+            at_decl_level = brace_depth == 0
+
         # --- Enum declaration ---
         enum_m = _ENUM_RE.match(line)
         if enum_m:
@@ -457,6 +559,10 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
                     in_enum = enum_name
                     enum_class_name = owning_class
                     enum_brace_depth = brace_depth
+                elif not enum_rest.rstrip().endswith(";"):
+                    # Brace on next line — defer (skip forward declarations)
+                    pending_enum = enum_name
+                    pending_enum_class = owning_class
 
             pending_template = ""
             brace_depth = new_depth
@@ -579,6 +685,11 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
             if "{" in line:
                 default_access = "public" if kind in ("struct", "union") else "private"
                 class_stack.append([name, kind, brace_depth, default_access])
+            else:
+                # Brace on next line — defer the push
+                inheritance = _extract_inheritance(rest)
+                # Type record was already emitted above
+                pending_class = [name, kind, inheritance, i, True]
 
             pending_template = ""
             brace_depth = new_depth
@@ -587,7 +698,7 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
 
         # --- Destructor ---
         dtor_m = _DTOR_RE.match(line)
-        if dtor_m and class_stack:
+        if dtor_m and class_stack and at_decl_level:
             class_name_match = dtor_m.group(1)
             if class_name_match == class_stack[-1][0] and is_public:
                 ns = _build_ns(namespace_stack)
@@ -628,7 +739,7 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
 
         # --- Operator overload ---
         op_m = _OPERATOR_RE.match(line)
-        if op_m and is_public:
+        if op_m and is_public and at_decl_level:
             qualifiers = op_m.group(1).strip()
             ret_type = op_m.group(2).strip()
             op_name = op_m.group(3).strip()
@@ -691,7 +802,7 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
             continue
 
         # --- Constructor ---
-        if class_stack:
+        if class_stack and at_decl_level:
             ctor_m = _CTOR_RE.match(line)
             if ctor_m:
                 ctor_name = ctor_m.group(2)
@@ -742,7 +853,7 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
 
         # --- Method / Free function ---
         func_m = _FUNC_RE.match(line)
-        if func_m and is_public:
+        if func_m and is_public and at_decl_level:
             qualifiers = func_m.group(1).strip()
             ret_type = func_m.group(2).strip()
             func_name = func_m.group(3)
@@ -816,8 +927,10 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
             i += 1
             continue
 
-        # --- Field (inside class/struct body, public only) ---
-        if class_stack and is_public:
+        # --- Field (inside class/struct body, public only, at class body level) ---
+        # Only match fields at class body depth (depth == class_depth + 1),
+        # not inside method bodies (depth >= class_depth + 2)
+        if class_stack and is_public and brace_depth == class_stack[-1][2] + 1:
             field_m = _FIELD_RE.match(line)
             if field_m:
                 field_quals = field_m.group(1).strip()
@@ -1114,10 +1227,17 @@ def _extract_params_str(full_sig: str, func_name: str) -> str:
 
 def _extract_trailing_qualifiers(full_sig: str) -> str:
     """Extract trailing qualifiers after the closing paren (const, noexcept, etc.)."""
+    # Truncate at method body start to avoid inline body content
+    # polluting the paren depth search (e.g., { IM_ASSERT(...) })
+    sig = full_sig
+    body_start = _find_body_brace(sig)
+    if body_start != -1:
+        sig = sig[:body_start]
+
     # Find the last closing paren at depth 0
     depth = 0
     last_close = -1
-    for j, ch in enumerate(full_sig):
+    for j, ch in enumerate(sig):
         if ch == "(":
             depth += 1
         elif ch == ")":
@@ -1128,12 +1248,7 @@ def _extract_trailing_qualifiers(full_sig: str) -> str:
     if last_close == -1:
         return ""
 
-    after = full_sig[last_close + 1:].strip()
-
-    # Strip body (everything from { onward)
-    brace_idx = after.find("{")
-    if brace_idx != -1:
-        after = after[:brace_idx].strip()
+    after = sig[last_close + 1:].strip()
 
     # Strip semicolons
     after = after.rstrip(";").strip()
@@ -1148,6 +1263,42 @@ def _extract_trailing_qualifiers(full_sig: str) -> str:
             after = before_colon
 
     return after.strip()
+
+
+def _find_body_brace(sig: str) -> int:
+    """Find the first '{' that's not inside parens, strings, or comments."""
+    depth = 0
+    in_double = False
+    in_single = False
+    escape = False
+    for j, ch in enumerate(sig):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if in_single:
+            if ch == "'":
+                in_single = False
+            continue
+        if in_double:
+            if ch == '"':
+                in_double = False
+            continue
+        if ch == "/" and j + 1 < len(sig) and sig[j + 1] == "/":
+            break
+        if ch == "'":
+            in_single = True
+        elif ch == '"':
+            in_double = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "{" and depth == 0:
+            return j
+    return -1
 
 
 def _extract_param_types(params_str: str) -> str:
