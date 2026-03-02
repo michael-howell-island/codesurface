@@ -199,21 +199,23 @@ class CppParser(BaseParser):
     def parse_directory(self, directory: Path) -> list[dict]:
         """Override to skip build/vendor/test directories."""
         records: list[dict] = []
-        for ext in self.file_extensions:
-            for f in sorted(directory.rglob(f"*{ext}")):
-                parts = f.relative_to(directory).parts
-                if any(
-                    p in _SKIP_DIRS
-                    or any(p.startswith(pfx) for pfx in _SKIP_DIR_PREFIXES)
-                    for p in parts
-                ):
-                    continue
-                try:
-                    records.extend(self.parse_file(f, directory))
-                except Exception as e:
-                    import sys
-                    print(f"codesurface: failed to parse {f}: {e}", file=sys.stderr)
-                    continue
+        ext_set = set(self.file_extensions)
+        for f in sorted(directory.rglob("*")):
+            if f.suffix not in ext_set:
+                continue
+            parts = f.relative_to(directory).parts
+            if any(
+                p in _SKIP_DIRS
+                or any(p.startswith(pfx) for pfx in _SKIP_DIR_PREFIXES)
+                for p in parts
+            ):
+                continue
+            try:
+                records.extend(self.parse_file(f, directory))
+            except Exception as e:
+                import sys
+                print(f"codesurface: failed to parse {f}: {e}", file=sys.stderr)
+                continue
         return records
 
     def parse_file(self, path: Path, base_dir: Path) -> list[dict]:
@@ -407,8 +409,7 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
                 next_stripped = lines[i].strip()
                 pending_template += " " + next_stripped
                 angle_depth += _count_angles(next_stripped)
-                brace_delta = _count_braces(lines[i])
-                new_depth = brace_depth + brace_delta
+                new_depth += _count_braces(lines[i])
             brace_depth = new_depth
             i += 1
             continue
@@ -435,7 +436,6 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
                     if val_value:
                         sig += f" = {val_value.strip()}"
 
-                    parent_class = enum_class_name or in_enum
                     fqn_parts = [p for p in [ns, enum_class_name, in_enum, val_name] if p]
                     fqn = "::".join(fqn_parts)
 
@@ -710,12 +710,12 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
         dtor_m = _DTOR_RE.match(line)
         if dtor_m and class_stack and at_decl_level:
             class_name_match = dtor_m.group(1)
+            full_sig, end_i = _collect_signature(lines, i)
             if class_name_match == class_stack[-1][0] and is_public:
                 ns = _build_ns(namespace_stack)
                 owning_class = class_stack[-1][0]
                 doc = _look_back_for_doc(lines, i)
 
-                full_sig, end_i = _collect_signature(lines, i)
                 params_str = _extract_params_str(full_sig, f"~{class_name_match}")
                 sig = _clean_sig(f"~{class_name_match}({params_str})")
 
@@ -743,8 +743,9 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
                 ))
 
             pending_template = ""
+            new_depth += sum(_count_braces(lines[j]) for j in range(i + 1, end_i + 1))
             brace_depth = new_depth
-            i += 1
+            i = end_i + 1
             continue
 
         # --- Operator overload ---
@@ -807,8 +808,9 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
             ))
 
             pending_template = ""
+            new_depth += sum(_count_braces(lines[j]) for j in range(i + 1, end_i + 1))
             brace_depth = new_depth
-            i += 1
+            i = end_i + 1
             continue
 
         # --- Constructor ---
@@ -816,13 +818,13 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
             ctor_m = _CTOR_RE.match(line)
             if ctor_m:
                 ctor_name = ctor_m.group(2)
+                full_sig, end_i = _collect_signature(lines, i)
                 if ctor_name == class_stack[-1][0] and is_public:
                     qualifiers = ctor_m.group(1).strip()
                     ns = _build_ns(namespace_stack)
                     owning_class = class_stack[-1][0]
                     doc = _look_back_for_doc(lines, i)
 
-                    full_sig, end_i = _collect_signature(lines, i)
                     params_str = _extract_params_str(full_sig, ctor_name)
 
                     sig_parts = []
@@ -857,8 +859,9 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
                     ))
 
                 pending_template = ""
+                new_depth += sum(_count_braces(lines[j]) for j in range(i + 1, end_i + 1))
                 brace_depth = new_depth
-                i += 1
+                i = end_i + 1
                 continue
 
         # --- Method / Free function ---
@@ -926,6 +929,11 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
             fqn_parts = [p for p in [ns, owning_class, func_name] if p]
             fqn = "::".join(fqn_parts)
 
+            # Handle overloads
+            param_types = _extract_param_types(params_str)
+            if param_types:
+                fqn += f"({param_types})"
+
             records.append(_build_record(
                 fqn=fqn,
                 namespace=ns,
@@ -942,8 +950,9 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
             ))
 
             pending_template = ""
+            new_depth += sum(_count_braces(lines[j]) for j in range(i + 1, end_i + 1))
             brace_depth = new_depth
-            i += 1
+            i = end_i + 1
             continue
 
         # --- Field (inside class/struct body, public only, at class body level) ---
@@ -1105,14 +1114,16 @@ def _look_back_for_doc(lines: list[str], decl_idx: int) -> dict:
 
     # Collect block comment lines
     block_lines: list[str] = []
+    found_marker = False
     while i >= 0:
         stripped = lines[i].strip()
         block_lines.append(stripped)
         if stripped.startswith("/**") or stripped.startswith("/*!"):
+            found_marker = True
             break
         i -= 1
 
-    if not block_lines:
+    if not found_marker or not block_lines:
         return result
 
     block_lines.reverse()
@@ -1170,10 +1181,11 @@ def _parse_doxygen_lines(doc_lines: list[str]) -> dict:
 
         # @return or \return or @returns or \returns
         if (line.startswith("@return") or line.startswith("\\return")):
-            tag = "@return" if line.startswith("@return") else "\\return"
-            rest = line[len(tag):].strip()
-            if rest.startswith("s"):
-                rest = rest[1:].strip()  # handle @returns
+            # Match longest tag first to avoid stripping 's' from description
+            for tag in ("@returns", "\\returns", "@return", "\\return"):
+                if line.startswith(tag):
+                    rest = line[len(tag):].strip()
+                    break
             returns = rest
             i += 1
             continue
@@ -1344,7 +1356,7 @@ def _extract_param_types(params_str: str) -> str:
         elif tokens:
             types.append(tokens[0].strip())
 
-    return ", ".join(types)
+    return ",".join(types)
 
 
 def _split_params(params: str) -> list[str]:
@@ -1422,6 +1434,15 @@ def _count_braces(line: str) -> int:
         # Check for line comment
         if ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
             break
+
+        # Check for block comment
+        if ch == "/" and i + 1 < len(line) and line[i + 1] == "*":
+            end = line.find("*/", i + 2)
+            if end != -1:
+                i = end + 2
+                continue
+            else:
+                break  # unclosed block comment, skip rest of line
 
         if ch == "'":
             in_single = True

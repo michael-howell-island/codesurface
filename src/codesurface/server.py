@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -337,7 +338,7 @@ def get_class(class_name: str) -> str:
     if _conn is None:
         return "No codebase indexed. Start the server with --project <path>."
 
-    short_name = class_name.rsplit(".", 1)[-1]
+    short_name = re.split(r"[.:]", class_name)[-1]
     members = db.get_class_members(_conn, short_name)
 
     if not members:
