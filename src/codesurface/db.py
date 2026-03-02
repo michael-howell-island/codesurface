@@ -38,10 +38,11 @@ def _build_search_text(record: dict) -> str:
         val = record.get(field, "")
         if val:
             tokens.append(split_identifier(val))
-    # Last namespace segment (e.g. "Services" from "CampGame.Services")
+    # Last namespace segment (e.g. "Services" from "CampGame.Services",
+    # or "Utils" from "MyLib::Utils")
     ns = record.get("namespace", "")
     if ns:
-        last_part = ns.rsplit(".", 1)[-1]
+        last_part = re.split(r"[.:]", ns)[-1]
         tokens.append(split_identifier(last_part))
     return " ".join(tokens)
 
@@ -249,7 +250,7 @@ def _escape_fts(query: str) -> str:
       "ICommand"            → (ICommand*) OR (I Command*)
     """
     q = query
-    for ch in '."-*()':
+    for ch in '."-*():':
         q = q.replace(ch, " ")
     terms = [t for t in q.split() if t]
     if not terms:
