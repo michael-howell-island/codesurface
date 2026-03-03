@@ -47,28 +47,48 @@ _CPP_KEYWORDS = frozenset({
 # Regex patterns
 # ---------------------------------------------------------------------------
 
-# Export/API macros: SFML_API, IMGUI_API, MY_EXPORT, CV_EXPORTS, etc.
-_EXPORT_MACRO_RE = re.compile(r"\b\w+_(?:API|EXPORTS?|DLL|SHARED)\b")
+# Trailing qualifier keywords that can follow the closing paren of a signature
+_TRAILING_QUAL_STARTS = (
+    "noexcept", "override", "final", "volatile",
+    "->", "= 0", "= default", "= delete", "[[", "requires", "throw(",
+)
+
+# Regex for matching "const" as a trailing qualifier of a method signature.
+# Must be followed by another known qualifier, semicolon, brace, =, or end-of-line.
+# This prevents "const Type& foo()" from being swallowed as a trailing qualifier.
+_TRAILING_CONST_RE = re.compile(
+    r"^const\s*(?:noexcept|override|final|volatile|;|\{|=|\[|\->|&|\s*$)"
+)
+
+# extern "C" { block — transparent scope (declarations inside are file-scope)
+_EXTERN_C_RE = re.compile(r'^\s*extern\s+"C"\s*\{')
+# extern "C" without brace (may be on next line, or single-decl form)
+_EXTERN_C_NOBRACE_RE = re.compile(r'^\s*extern\s+"C"\s*$')
+
+# Export/API macros: SFML_API, IMGUI_API, MY_EXPORT, CV_EXPORTS, CV_EXPORTS_W, etc.
+_EXPORT_MACRO_RE = re.compile(r"\b\w+_(?:API|EXPORTS?|DLL|SHARED)(?:_\w+)*\b")
 
 # Namespace: namespace foo { or namespace foo::bar {
 _NAMESPACE_RE = re.compile(
-    r"^\s*namespace\s+"
+    r"^\s*(?:inline\s+)?namespace\s+"
     r"(\w+(?:::\w+)*)"          # namespace name (possibly nested)
     r"\s*\{?"
 )
 
 # Anonymous namespace
-_ANON_NAMESPACE_RE = re.compile(r"^\s*namespace\s*\{")
+_ANON_NAMESPACE_RE = re.compile(r"^\s*(?:inline\s+)?namespace\s*\{")
 
 # Access specifier: public: / protected: / private:
 _ACCESS_RE = re.compile(r"^\s*(public|protected|private)\s*:")
 
 # Class/struct/union declaration
 # Handles: template<...> class EXPORT_API ClassName : public Base {
+# Handles: struct [[nodiscard]] ClassName : public Base {
 _CLASS_RE = re.compile(
     r"^\s*(?:template\s*<[^>]*>\s*)?"       # optional template<...>
     r"(class|struct|union)\s+"
-    r"(?:\w+_(?:API|EXPORTS?|DLL|SHARED)\s+)?"  # optional export macro
+    r"(?:\[\[[^\]]*\]\]\s*)?"               # optional [[attribute]]
+    r"(?:\w+_(?:API|EXPORTS?|DLL|SHARED)(?:_\w+)*\s+)?"  # optional export macro
     r"(\w+)"                                 # class name
     r"(?:\s+final)?"                         # optional final
     r"(.*)"                                  # rest: inheritance, {, ;
@@ -77,7 +97,8 @@ _CLASS_RE = re.compile(
 # Forward declaration: class Foo; or struct Foo;
 _FORWARD_DECL_RE = re.compile(
     r"^\s*(?:class|struct|union)\s+"
-    r"(?:\w+_(?:API|EXPORTS?|DLL|SHARED)\s+)?"
+    r"(?:\[\[[^\]]*\]\]\s*)?"               # optional [[attribute]]
+    r"(?:\w+_(?:API|EXPORTS?|DLL|SHARED)(?:_\w+)*\s+)?"
     r"\w+\s*;"
 )
 
@@ -88,7 +109,7 @@ _FRIEND_RE = re.compile(r"^\s*friend\s+")
 _ENUM_RE = re.compile(
     r"^\s*(enum\s+class|enum\s+struct|enum)\s+"
     r"(\w+)"                                 # enum name
-    r"(?:\s*:\s*(\w+))?"                     # optional underlying type
+    r"(?:\s*:\s*([\w:]+(?:\s+\w+)*))?"       # optional underlying type
     r"(.*)"                                  # rest
 )
 
@@ -114,29 +135,41 @@ _USING_ALIAS_RE = re.compile(
 
 # Method/function declaration (very broad, refined in code)
 # Captures: optional qualifiers, return type, name, params
+# Return type is greedy and must end at a ptr/ref char or whitespace boundary,
+# which correctly handles all C++ pointer styles:
+#   Type name(     — ends at space
+#   Type *name(    — ends at * (Godot/Linux style)
+#   Type* name(    — ends at space after *
+#   Type * name(   — ends at space after *
 _FUNC_RE = re.compile(
     r"^\s*"
     r"((?:(?:static|virtual|inline|explicit|constexpr|consteval|"
     r"friend|extern|nodiscard|\[\[nodiscard\]\]|"
-    r"\w+_(?:API|EXPORTS?|DLL|SHARED))\s+)*)"  # leading qualifiers
-    r"([\w:*&<>,\s]+?)\s+"                   # return type
+    r"\w+_(?:API|EXPORTS?|DLL|SHARED)(?:_\w+)*|"
+    r"[A-Z_][A-Z_0-9]+)\s+)*)"              # leading qualifiers (incl. ALL_CAPS macros)
+    r"([\w:*&<>,\s]+(?:[*&]\s*|\s))"         # return type (greedy, ends at ptr/ref or space)
     r"(\w+)"                                 # function/method name
     r"\s*\("                                 # open paren
 )
 
 # Constructor: ClassName(params)
+# Accepts C++ keywords + ALL_CAPS macro qualifiers (SIMD_FORCE_INLINE, _FORCE_INLINE_, etc.)
+# Safe to be permissive: name must match current class (checked in code at line ~896)
 _CTOR_RE = re.compile(
     r"^\s*"
     r"((?:(?:explicit|inline|constexpr|consteval|"
-    r"\w+_(?:API|EXPORTS?|DLL|SHARED))\s+)*)"  # optional qualifiers
+    r"\w+_(?:API|EXPORTS?|DLL|SHARED)(?:_\w+)*|"  # export macros (CV_EXPORTS_W, etc.)
+    r"[A-Z_][A-Z_0-9]+)\s+)*)"              # ALL_CAPS macros (SIMD_FORCE_INLINE, etc.)
     r"(\w+)"                                 # class name (must match current)
     r"\s*\("                                 # open paren
 )
 
-# Destructor: ~ClassName() or virtual ~ClassName()
+# Destructor: ~ClassName(), virtual ~ClassName(), EXPORT_API ~ClassName()
 _DTOR_RE = re.compile(
     r"^\s*"
-    r"(?:virtual\s+)?"
+    r"(?:(?:virtual|inline|"
+    r"\w+_(?:API|EXPORTS?|DLL|SHARED)(?:_\w+)*|"
+    r"[A-Z_][A-Z_0-9]+)\s+)*"               # optional qualifiers
     r"~(\w+)"                                # class name
     r"\s*\("
 )
@@ -145,12 +178,13 @@ _DTOR_RE = re.compile(
 _OPERATOR_RE = re.compile(
     r"^\s*"
     r"((?:(?:static|virtual|inline|explicit|constexpr|friend|"
-    r"\w+_(?:API|EXPORTS?|DLL|SHARED))\s+)*)"  # leading qualifiers
+    r"\w+_(?:API|EXPORTS?|DLL|SHARED)(?:_\w+)*)\s+)*)"  # leading qualifiers
     r"([\w:*&<>,\s]*?)\s*"                   # return type (may be empty for conversion)
     r"(operator\s*(?:\(\)|"                   # operator() — call operator
     r"\[\]|"                                  # operator[] — subscript
     r"->|"                                    # operator-> — member access
     r"<<|>>|"                                 # shift operators
+    r"\+\+|--|"                              # increment/decrement operators
     r"[+\-*/%^&|~!=<>]=?|"                   # arithmetic/comparison ops
     r"&&|\|\||"                              # logical ops
     r",|"                                    # comma operator
@@ -161,10 +195,11 @@ _OPERATOR_RE = re.compile(
 
 # Field declaration: type name; or type name = value;
 # Only matched inside class/struct bodies when access is public
+# Type uses greedy match ending at ptr/ref or space (handles Type*Name style)
 _FIELD_RE = re.compile(
     r"^\s*"
     r"((?:(?:static|const|constexpr|inline|mutable|volatile)\s+)*)"  # qualifiers
-    r"([\w:*&<>,\s]+?)\s+"                    # type
+    r"([\w:*&<>,\s]+(?:[*&]\s*|\s))"          # type (greedy, ends at ptr/ref or space)
     r"(\w+)"                                  # field name
     r"(?:\s*(?:=\s*[^;]+|{[^}]*}|\[[^\]]*\]))?"  # optional init
     r"\s*;"
@@ -178,6 +213,14 @@ _MACRO_CLASS_RE = re.compile(
 
 # Bare class name on its own line (follows a MACRO(class) line)
 _BARE_NAME_RE = re.compile(r"^\s*(\w+)\s*$")
+
+# Class name with inheritance on same line (follows a MACRO(class) line)
+# e.g., "btTypedConstraint : public btTypedObject"
+_BARE_NAME_INHERIT_RE = re.compile(
+    r"^\s*(\w+)"                              # class name
+    r"(?:\s+final)?"                          # optional final
+    r"\s*:\s*(.+)"                            # : inheritance...
+)
 
 # Template prefix: template<...> (possibly multi-line)
 _TEMPLATE_RE = re.compile(r"^\s*template\s*<")
@@ -259,6 +302,10 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
     pending_class: list | None = None
     # MACRO(class) on previous line — kind stored, waiting for name on next line
     pending_macro_class_kind: str = ""
+    # extern "C" { transparent scopes — track brace depths so declarations
+    # inside are treated as file-scope rather than nested
+    extern_c_depths: list[int] = []
+    pending_extern_c: bool = False
 
     i = 0
     while i < len(lines):
@@ -302,14 +349,16 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
             continue
 
         # Constructor initializer list lines (: member(val) or , member(val))
-        if stripped.startswith(":") and not stripped.startswith("::"):
-            brace_depth += _count_braces(line)
-            i += 1
-            continue
-        if stripped.startswith(",") and "(" in stripped:
-            brace_depth += _count_braces(line)
-            i += 1
-            continue
+        # Only skip when inside a class body (not at namespace/file scope)
+        if class_stack and brace_depth > class_stack[-1][2]:
+            if stripped.startswith(":") and not stripped.startswith("::"):
+                brace_depth += _count_braces(line)
+                i += 1
+                continue
+            if stripped.startswith(",") and "(" in stripped:
+                brace_depth += _count_braces(line)
+                i += 1
+                continue
 
         # Preprocessor
         if _PREPROCESSOR_RE.match(line):
@@ -320,19 +369,59 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
             i += 1
             continue
 
+        # --- extern "C" { transparent scope ---
+        if _EXTERN_C_RE.match(stripped):
+            # extern "C" { on this line — record brace depth, consume the {
+            extern_c_depths.append(brace_depth)
+            brace_depth += _count_braces(line)
+            i += 1
+            continue
+        if _EXTERN_C_NOBRACE_RE.match(stripped):
+            # extern "C" without { — brace may be on next line
+            pending_extern_c = True
+            i += 1
+            continue
+        if pending_extern_c:
+            pending_extern_c = False
+            if stripped.startswith("{"):
+                extern_c_depths.append(brace_depth)
+                brace_depth += _count_braces(line)
+                i += 1
+                continue
+            # No brace — single-decl form (extern "C" void foo();)
+            # Fall through to normal parsing
+
         # Count braces
         brace_delta = _count_braces(line)
         new_depth = brace_depth + brace_delta
 
+        # Close extern "C" scopes when brace depth drops
+        while extern_c_depths and new_depth <= extern_c_depths[-1]:
+            extern_c_depths.pop()
+
         # --- MACRO(class) pattern (e.g. ATTRIBUTE_ALIGNED16(class)) ---
         if pending_macro_class_kind:
-            # Expecting the class name on this line
+            # Expecting the class name on this line (bare or with inheritance)
             bare_m = _BARE_NAME_RE.match(stripped)
             if bare_m:
                 macro_name = bare_m.group(1)
                 if macro_name not in _CPP_KEYWORDS:
-                    # Treat as class declaration — defer push until {
                     pending_class = [macro_name, pending_macro_class_kind, "", i, False]
+                    pending_macro_class_kind = ""
+                    brace_depth = new_depth
+                    i += 1
+                    continue
+            # Also try name with inheritance: "Name : public Base"
+            inherit_m = _BARE_NAME_INHERIT_RE.match(stripped)
+            if inherit_m:
+                macro_name = inherit_m.group(1)
+                macro_inherit = inherit_m.group(2).strip()
+                # Strip opening brace from inheritance if present
+                brace_pos = macro_inherit.find("{")
+                if brace_pos != -1:
+                    macro_inherit = macro_inherit[:brace_pos].strip()
+                if macro_name not in _CPP_KEYWORDS:
+                    pending_class = [macro_name, pending_macro_class_kind, macro_inherit, i, False]
                     pending_macro_class_kind = ""
                     brace_depth = new_depth
                     i += 1
@@ -527,7 +616,7 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
         elif namespace_stack:
             at_decl_level = brace_depth == namespace_stack[-1][1] + 1
         else:
-            at_decl_level = brace_depth == 0
+            at_decl_level = brace_depth == len(extern_c_depths)
 
         # --- Enum declaration ---
         enum_m = _ENUM_RE.match(line)
@@ -565,7 +654,38 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
                 ))
 
                 # Track enum body for value extraction
-                if "{" in line:
+                if "{" in line and "}" in line:
+                    # Single-line enum: enum Foo { A, B, C };
+                    brace_open = line.index("{")
+                    brace_close = line.index("}")
+                    body = line[brace_open + 1:brace_close].strip()
+                    if body:
+                        for val_part in body.split(","):
+                            val_part = val_part.strip()
+                            if not val_part:
+                                continue
+                            val_m2 = _ENUM_VALUE_RE.match(val_part)
+                            if val_m2:
+                                val_name = val_m2.group(1)
+                                if val_name not in _CPP_KEYWORDS:
+                                    val_value = val_m2.group(2)
+                                    sig2 = val_name
+                                    if val_value:
+                                        sig2 += f" = {val_value.strip()}"
+                                    fqn_parts2 = [p for p in [ns, owning_class, enum_name, val_name] if p]
+                                    fqn2 = "::".join(fqn_parts2)
+                                    records.append(_build_record(
+                                        fqn=fqn2,
+                                        namespace=ns,
+                                        class_name=enum_name,
+                                        member_name=val_name,
+                                        member_type="field",
+                                        signature=sig2,
+                                        file_path=rel_path,
+                                        line_start=i + 1,
+                                        line_end=i + 1,
+                                    ))
+                elif "{" in line:
                     in_enum = enum_name
                     enum_class_name = owning_class
                     enum_brace_depth = brace_depth
@@ -791,6 +911,9 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
             param_types = _extract_param_types(params_str)
             if param_types:
                 fqn += f"({param_types})"
+            # Distinguish const vs non-const overloads
+            if _quals_have_const(quals):
+                fqn += " const"
 
             records.append(_build_record(
                 fqn=fqn,
@@ -832,6 +955,11 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
                         sig_parts.append(_strip_export_macros(qualifiers))
                     sig_parts.append(f"{ctor_name}({params_str})")
                     sig = _clean_sig(" ".join(sig_parts))
+
+                    # Add trailing qualifiers (noexcept, = default, = delete, etc.)
+                    quals = _extract_trailing_qualifiers(full_sig)
+                    if quals:
+                        sig += " " + quals
 
                     if pending_template:
                         sig = pending_template + " " + sig
@@ -933,6 +1061,9 @@ def _parse_cpp_file(path: Path, base_dir: Path) -> list[dict]:
             param_types = _extract_param_types(params_str)
             if param_types:
                 fqn += f"({param_types})"
+            # Distinguish const vs non-const overloads
+            if _quals_have_const(quals):
+                fqn += " const"
 
             records.append(_build_record(
                 fqn=fqn,
@@ -1128,6 +1259,20 @@ def _look_back_for_doc(lines: list[str], decl_idx: int) -> dict:
 
     block_lines.reverse()
 
+    # Reject copyright/license block comments (not doc comments)
+    raw_text = " ".join(block_lines)
+    if any(kw in raw_text for kw in (
+        "Copyright", "copyright", "LICENSE", "License", "license",
+        "SPDX-License", "Permission is hereby granted",
+        "All rights reserved", "WARRANTY",
+        "#pragma", "#include", "#ifndef",
+    )):
+        return result
+
+    # Reject very large block comments (likely file-level headers, not doc comments)
+    if len(block_lines) > 40:
+        return result
+
     # Clean up block comment markers
     cleaned: list[str] = []
     for bline in block_lines:
@@ -1232,6 +1377,24 @@ def _collect_signature(lines: list[str], start: int) -> tuple[str, int]:
         sig += " " + next_line
         paren_depth += _count_parens(next_line)
 
+    # After parens balance, collect trailing qualifiers on subsequent lines
+    # (const, noexcept, override, final, ->, = 0, = default, = delete, etc.)
+    while i + 1 < limit:
+        next_line = lines[i + 1].strip()
+        if not next_line or next_line.startswith("//"):
+            break
+        if next_line.startswith("{") or next_line.startswith(";"):
+            break
+        if any(next_line.startswith(q) for q in _TRAILING_QUAL_STARTS) or \
+                _TRAILING_CONST_RE.match(next_line):
+            i += 1
+            sig += " " + next_line
+            # Stop if this line ends the declaration
+            if ";" in next_line or "{" in next_line:
+                break
+        else:
+            break
+
     return sig, i
 
 
@@ -1254,6 +1417,14 @@ def _extract_params_str(full_sig: str, func_name: str) -> str:
     params = full_sig[paren_start + 1:paren_end].strip()
     params = re.sub(r"\s+", " ", params)
     return _strip_export_macros(params)
+
+
+def _quals_have_const(quals: str) -> bool:
+    """Check if trailing qualifiers contain a top-level 'const' (method constness)."""
+    if not quals:
+        return False
+    # Match 'const' as a whole word, not inside noexcept(...) or other tokens
+    return bool(re.search(r"\bconst\b", quals))
 
 
 def _extract_trailing_qualifiers(full_sig: str) -> str:
@@ -1281,6 +1452,11 @@ def _extract_trailing_qualifiers(full_sig: str) -> str:
 
     after = sig[last_close + 1:].strip()
 
+    # Strip inline comments (// ...)
+    comment_idx = after.find("//")
+    if comment_idx != -1:
+        after = after[:comment_idx].strip()
+
     # Strip semicolons
     after = after.rstrip(";").strip()
 
@@ -1292,6 +1468,12 @@ def _extract_trailing_qualifiers(full_sig: str) -> str:
         before_colon = after[:colon_idx].strip()
         if not before_colon.endswith("="):
             after = before_colon
+
+    # Validate: if remaining text doesn't start with a known trailing qualifier,
+    # it's likely leaked comment text (e.g., ". Dead-zones should be handled...")
+    if after and not any(after.startswith(q) for q in _TRAILING_QUAL_STARTS) \
+            and not _TRAILING_CONST_RE.match(after):
+        after = ""
 
     return after.strip()
 
