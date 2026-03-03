@@ -1530,10 +1530,16 @@ def _extract_param_types(params_str: str) -> str:
         eq_idx = _find_default_eq(part)
         if eq_idx != -1:
             part = part[:eq_idx].strip()
-        # Last word (before any & or *) is the param name, rest is type
+        # Last word is the param name, rest is type.
+        # Handle pointer/ref attached to name: "int *p" → type "int*"
         tokens = part.rsplit(None, 1)
         if len(tokens) >= 2:
             type_part = tokens[0].strip()
+            name_part = tokens[1]
+            # Move leading *& from name back to type
+            while name_part and name_part[0] in "*&":
+                type_part += name_part[0]
+                name_part = name_part[1:]
             types.append(type_part)
         elif tokens:
             types.append(tokens[0].strip())

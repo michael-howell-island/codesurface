@@ -192,7 +192,7 @@ def get_by_fqn(conn: sqlite3.Connection, fqn: str) -> dict | None:
 def get_class_members(conn: sqlite3.Connection, class_name: str,
                       namespace: str | None = None) -> list[dict]:
     """Get all members of a class by class name, optionally filtered by namespace."""
-    if namespace:
+    if namespace is not None:
         rows = conn.execute(
             "SELECT * FROM api_records WHERE class_name = ? AND namespace = ? "
             "ORDER BY member_type, member_name",
