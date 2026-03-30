@@ -108,3 +108,61 @@ def test_codesurfaceignore_missing_is_fine(tmp_project):
     # No .codesurfaceignore present — should not raise
     pf = PathFilter(tmp_project)
     assert not pf.is_file_excluded(tmp_project / "src" / "main.ts")
+
+
+# ---- Query-time file_path filtering ----
+from codesurface import db as csdb
+
+
+def _make_db():
+    records = [
+        {
+            "fqn": "Services.FooService",
+            "namespace": "Services",
+            "class_name": "FooService",
+            "member_name": "FooService",
+            "member_type": "type",
+            "signature": "class FooService",
+            "file_path": "src/services/foo.ts",
+            "line_start": 1,
+            "line_end": 10,
+        },
+        {
+            "fqn": "Utils.BarUtil",
+            "namespace": "Utils",
+            "class_name": "BarUtil",
+            "member_name": "BarUtil",
+            "member_type": "type",
+            "signature": "class BarUtil",
+            "file_path": "src/utils/bar.ts",
+            "line_start": 1,
+            "line_end": 5,
+        },
+    ]
+    return csdb.create_memory_db(records)
+
+
+def test_search_file_path_prefix_filters():
+    conn = _make_db()
+    results = csdb.search(conn, "Service", file_path="src/services/")
+    assert len(results) == 1
+    assert results[0]["class_name"] == "FooService"
+
+
+def test_search_file_path_exact_file():
+    conn = _make_db()
+    results = csdb.search(conn, "Bar", file_path="src/utils/bar.ts")
+    assert len(results) == 1
+    assert results[0]["class_name"] == "BarUtil"
+
+
+def test_search_file_path_no_match_returns_empty():
+    conn = _make_db()
+    results = csdb.search(conn, "Foo", file_path="src/utils/")
+    assert len(results) == 0
+
+
+def test_search_no_file_path_returns_all():
+    conn = _make_db()
+    results = csdb.search(conn, "Service OR Bar", file_path=None)
+    assert len(results) == 2
