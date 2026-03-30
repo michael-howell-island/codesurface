@@ -197,12 +197,28 @@ def get_by_fqn(conn: sqlite3.Connection, fqn: str) -> dict | None:
     return dict(row) if row else None
 
 
-def get_class_members(conn: sqlite3.Connection, class_name: str) -> list[dict]:
+def get_class_members(conn: sqlite3.Connection, class_name: str,
+                      file_path: str | None = None) -> list[dict]:
     """Get all members of a class by class name."""
-    rows = conn.execute(
-        "SELECT * FROM api_records WHERE class_name = ? ORDER BY member_type, member_name",
-        (class_name,),
-    ).fetchall()
+    if file_path:
+        if file_path.endswith("/"):
+            rows = conn.execute(
+                "SELECT * FROM api_records WHERE class_name = ? AND file_path LIKE ? "
+                "ORDER BY member_type, member_name",
+                (class_name, file_path + "%"),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM api_records WHERE class_name = ? "
+                "AND (file_path = ? OR file_path LIKE ?) "
+                "ORDER BY member_type, member_name",
+                (class_name, file_path, file_path + "/%"),
+            ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM api_records WHERE class_name = ? ORDER BY member_type, member_name",
+            (class_name,),
+        ).fetchall()
     return [dict(row) for row in rows]
 
 

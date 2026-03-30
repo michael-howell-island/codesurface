@@ -166,3 +166,16 @@ def test_search_no_file_path_returns_all():
     conn = _make_db()
     results = csdb.search(conn, "Service OR Bar", file_path=None)
     assert len(results) == 2
+
+
+def test_get_class_members_file_path_prefix():
+    conn = _make_db()
+    results = csdb.get_class_members(conn, "FooService", file_path="src/services/")
+    assert len(results) == 1
+    assert results[0]["class_name"] == "FooService"
+
+
+def test_get_class_members_file_path_no_match():
+    conn = _make_db()
+    results = csdb.get_class_members(conn, "FooService", file_path="src/utils/")
+    assert len(results) == 0

@@ -52,7 +52,7 @@ class PathFilter:
     - Any subdirectory with a .git FILE referencing /modules/ (submodule),
       unless include_submodules=True
 
-    User exclusions are added in Task 2.
+    User exclusions via exclude_globs (CLI) and .codesurfaceignore (project file).
     """
 
     def __init__(

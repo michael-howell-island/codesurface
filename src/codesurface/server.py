@@ -146,7 +146,7 @@ def _index_incremental(project_path: Path) -> tuple[str, bool]:
     # Parse dirty files
     new_records = []
     for rel in sorted(dirty):
-        full_path = project_path / rel.replace("/", "\\")
+        full_path = project_path / Path(rel)
         suffix = full_path.suffix
         parser = ext_to_parser.get(suffix)
         if parser is None:
@@ -372,11 +372,11 @@ def get_class(class_name: str, file_path: str | None = None) -> str:
         return "No codebase indexed. Start the server with --project <path>."
 
     short_name = class_name.rsplit(".", 1)[-1]
-    members = db.get_class_members(_conn, short_name)
+    members = db.get_class_members(_conn, short_name, file_path=file_path)
 
     if not members:
         if _auto_reindex():
-            members = db.get_class_members(_conn, short_name)
+            members = db.get_class_members(_conn, short_name, file_path=file_path)
         if not members:
             results = db.search(_conn, class_name, n=5, member_type="type", file_path=file_path)
             if results:
