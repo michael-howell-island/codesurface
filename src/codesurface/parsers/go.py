@@ -10,6 +10,7 @@ Doc comments are consecutive // lines immediately before a declaration.
 
 import os
 import re
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -170,12 +171,11 @@ class GoParser(BaseParser):
                     continue
                 try:
                     records.extend(self.parse_file(f, directory))
+                except Exception as e:
+                    print(f"codesurface: failed to parse {f}: {e}", file=sys.stderr)
+                finally:
                     if on_progress is not None:
                         on_progress(f)
-                except Exception as e:
-                    import sys
-                    print(f"codesurface: failed to parse {f}: {e}", file=sys.stderr)
-                    continue
         return records
 
     def parse_file(self, path: Path, base_dir: Path) -> list[dict]:

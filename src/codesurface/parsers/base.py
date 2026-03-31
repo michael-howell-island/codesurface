@@ -55,9 +55,10 @@ class BaseParser(ABC):
                     continue
                 try:
                     records.extend(self.parse_file(f, directory))
+                except Exception:
+                    pass
+                finally:
                     if on_progress is not None:
                         on_progress(f)
-                except Exception:
-                    continue
 
         return records
