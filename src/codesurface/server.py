@@ -575,8 +575,7 @@ def main():
                 exclude_globs=exclude_globs,
                 include_submodules=args.include_submodules,
             )
-            summary = _index_full(_project_path, language=args.language)
-            print(summary, file=sys.stderr)
+            _index_full(_project_path, language=args.language)
 
     mcp.run()
 

@@ -50,4 +50,6 @@ def test_index_full_emits_progress_to_stderr(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "[codesurface]" in captured.err
+    assert "scanning" in captured.err       # e.g. "[codesurface] scanning 5 files..."
+    assert "indexing:" in captured.err      # e.g. "[codesurface] indexing:   0% ..."
     assert "done:" in captured.err
