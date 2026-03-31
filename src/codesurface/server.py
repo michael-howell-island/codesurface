@@ -45,8 +45,12 @@ def _count_files(
         if path_filter is not None:
             dirs[:] = [d for d in dirs if not path_filter.is_dir_excluded(root_path / d)]
         for filename in files:
-            if filename.endswith(exts):
-                total += 1
+            if not filename.endswith(exts):
+                continue
+            f = root_path / filename
+            if path_filter is not None and path_filter.is_file_excluded(f):
+                continue
+            total += 1
     return total
 
 
