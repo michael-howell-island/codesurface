@@ -5,6 +5,7 @@ interfaces, enums, records, annotation types, and their members.
 Javadoc comments (/** ... */) are extracted as summaries.
 """
 
+import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -140,37 +141,29 @@ class JavaParser(BaseParser):
     ) -> list[dict]:
         """Override to skip test/build directories."""
         records = []
-        for f in sorted(directory.rglob("*.java")):
-            parts = f.relative_to(directory).parts
-            if any(p in _SKIP_DIRS for p in parts):
-                continue
-            fname = f.name
-            if fname in _SKIP_FILES:
-                continue
-            if any(fname.endswith(s) for s in _SKIP_SUFFIXES):
-                continue
-            if path_filter is not None:
+        for root, dirs, files in os.walk(directory):
+            root_path = Path(root)
+            dirs[:] = [
+                d for d in dirs
+                if d not in _SKIP_DIRS
+                and (path_filter is None or not path_filter.is_dir_excluded(root_path / d))
+            ]
+            for filename in files:
+                if not filename.endswith(".java"):
+                    continue
+                if filename in _SKIP_FILES:
+                    continue
+                if any(filename.endswith(s) for s in _SKIP_SUFFIXES):
+                    continue
+                f = root_path / filename
+                if path_filter is not None and path_filter.is_file_excluded(f):
+                    continue
                 try:
-                    rel_parts = f.relative_to(directory).parts
-                except ValueError:
+                    records.extend(self.parse_file(f, directory))
+                except Exception as e:
+                    import sys
+                    print(f"codesurface: failed to parse {f}: {e}", file=sys.stderr)
                     continue
-                excluded = False
-                current = directory
-                for part in rel_parts[:-1]:
-                    current = current / part
-                    if path_filter.is_dir_excluded(current):
-                        excluded = True
-                        break
-                if excluded:
-                    continue
-                if path_filter.is_file_excluded(f):
-                    continue
-            try:
-                records.extend(self.parse_file(f, directory))
-            except Exception as e:
-                import sys
-                print(f"codesurface: failed to parse {f}: {e}", file=sys.stderr)
-                continue
         return records
 
     def parse_file(self, path: Path, base_dir: Path) -> list[dict]:

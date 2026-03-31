@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -50,14 +51,21 @@ def _index_full(project_path: Path, language: str | None = None) -> str:
     _conn = db.create_memory_db(records)
     db_time = time.perf_counter() - t1
 
-    # Snapshot mtimes for all registered extensions used
+    # Snapshot mtimes for all registered extensions (pruning excluded dirs)
     extensions = set()
     for parser in parsers:
         extensions.update(parser.file_extensions)
+    exts = tuple(extensions)
 
     _file_mtimes = {}
-    for ext in extensions:
-        for f in sorted(project_path.rglob(f"*{ext}")):
+    for root, dirs, files in os.walk(project_path):
+        root_path = Path(root)
+        if _path_filter is not None:
+            dirs[:] = [d for d in dirs if not _path_filter.is_dir_excluded(root_path / d)]
+        for filename in files:
+            if not filename.endswith(exts):
+                continue
+            f = root_path / filename
             rel = str(f.relative_to(project_path)).replace("\\", "/")
             try:
                 _file_mtimes[rel] = f.stat().st_mtime
@@ -85,28 +93,20 @@ def _index_incremental(project_path: Path) -> tuple[str, bool]:
     t0 = time.perf_counter()
 
     # Collect all registered extensions
-    extensions = set(all_extensions())
+    exts = tuple(all_extensions())
 
-    # Scan current files
+    # Scan current files, pruning excluded directories during walk
     current: dict[str, float] = {}
-    for ext in extensions:
-        for f in sorted(project_path.rglob(f"*{ext}")):
-            if _path_filter is not None:
-                try:
-                    rel_parts = f.relative_to(project_path).parts
-                except ValueError:
-                    continue
-                skip = False
-                cur = project_path
-                for part in rel_parts[:-1]:
-                    cur = cur / part
-                    if _path_filter.is_dir_excluded(cur):
-                        skip = True
-                        break
-                if skip:
-                    continue
-                if _path_filter.is_file_excluded(f):
-                    continue
+    for root, dirs, files in os.walk(project_path):
+        root_path = Path(root)
+        if _path_filter is not None:
+            dirs[:] = [d for d in dirs if not _path_filter.is_dir_excluded(root_path / d)]
+        for filename in files:
+            if not filename.endswith(exts):
+                continue
+            f = root_path / filename
+            if _path_filter is not None and _path_filter.is_file_excluded(f):
+                continue
             rel = str(f.relative_to(project_path)).replace("\\", "/")
             try:
                 current[rel] = f.stat().st_mtime

@@ -1,5 +1,6 @@
 """Abstract base class for language parsers."""
 
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,32 +30,31 @@ class BaseParser(ABC):
     ) -> list[dict]:
         """Recursively parse all matching files under *directory*.
 
-        If path_filter is provided, excluded directories are pruned before
-        descent and excluded files are skipped before parsing.
+        Uses os.walk so excluded directories (worktrees, submodules) are
+        pruned before descent — rglob cannot prune mid-walk.
         """
+        exts = tuple(self.file_extensions)
         records = []
-        for ext in self.file_extensions:
-            for f in sorted(directory.rglob(f"*{ext}")):
-                if path_filter is not None:
-                    # Check each ancestor directory between root and file
-                    try:
-                        rel_parts = f.relative_to(directory).parts
-                    except ValueError:
-                        continue
-                    excluded = False
-                    current = directory
-                    for part in rel_parts[:-1]:  # all parts except the filename
-                        current = current / part
-                        if path_filter.is_dir_excluded(current):
-                            excluded = True
-                            break
-                    if excluded:
-                        continue
-                    # Check file-level exclusion
-                    if path_filter.is_file_excluded(f):
-                        continue
+
+        for root, dirs, files in os.walk(directory):
+            root_path = Path(root)
+
+            if path_filter is not None:
+                # Prune excluded directories IN PLACE so os.walk skips them
+                dirs[:] = [
+                    d for d in dirs
+                    if not path_filter.is_dir_excluded(root_path / d)
+                ]
+
+            for filename in files:
+                if not filename.endswith(exts):
+                    continue
+                f = root_path / filename
+                if path_filter is not None and path_filter.is_file_excluded(f):
+                    continue
                 try:
                     records.extend(self.parse_file(f, directory))
                 except Exception:
                     continue
+
         return records

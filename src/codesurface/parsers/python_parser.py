@@ -5,6 +5,7 @@ functions, methods, properties, and module-level constants.
 Docstrings are extracted as summaries.
 """
 
+import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -82,37 +83,29 @@ class PythonParser(BaseParser):
     ) -> list[dict]:
         """Override to skip common non-source directories."""
         records = []
-        for f in sorted(directory.rglob("*.py")):
-            # Skip files in excluded directories
-            parts = f.relative_to(directory).parts
-            if any(p in _SKIP_DIRS for p in parts):
-                continue
-            if any(p.endswith(".egg-info") for p in parts):
-                continue
-            if f.name in _SKIP_FILES:
-                continue
-            if path_filter is not None:
+        for root, dirs, files in os.walk(directory):
+            root_path = Path(root)
+            # Prune skip dirs and path_filter exclusions before descent
+            dirs[:] = [
+                d for d in dirs
+                if d not in _SKIP_DIRS
+                and not d.endswith(".egg-info")
+                and (path_filter is None or not path_filter.is_dir_excluded(root_path / d))
+            ]
+            for filename in files:
+                if not filename.endswith(".py"):
+                    continue
+                if filename in _SKIP_FILES:
+                    continue
+                f = root_path / filename
+                if path_filter is not None and path_filter.is_file_excluded(f):
+                    continue
                 try:
-                    rel_parts = f.relative_to(directory).parts
-                except ValueError:
+                    records.extend(self.parse_file(f, directory))
+                except Exception as e:
+                    import sys
+                    print(f"codesurface: failed to parse {f}: {e}", file=sys.stderr)
                     continue
-                excluded = False
-                current = directory
-                for part in rel_parts[:-1]:
-                    current = current / part
-                    if path_filter.is_dir_excluded(current):
-                        excluded = True
-                        break
-                if excluded:
-                    continue
-                if path_filter.is_file_excluded(f):
-                    continue
-            try:
-                records.extend(self.parse_file(f, directory))
-            except Exception as e:
-                import sys
-                print(f"codesurface: failed to parse {f}: {e}", file=sys.stderr)
-                continue
         return records
 
     def parse_file(self, path: Path, base_dir: Path) -> list[dict]:
