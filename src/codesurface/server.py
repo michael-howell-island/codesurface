@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from . import db
+from .filters import PathFilter
 from .parsers import all_extensions, detect_languages, get_parser, get_parsers_for_project
 
 mcp = FastMCP(
@@ -24,6 +26,7 @@ _conn = None
 _project_path: Path | None = None
 _file_mtimes: dict[str, float] = {}  # rel_path → mtime
 _index_fresh: bool = True  # True = checked for changes since last hit; skip auto-reindex
+_path_filter: PathFilter | None = None
 
 
 def _index_full(project_path: Path, language: str | None = None) -> str:
@@ -41,21 +44,28 @@ def _index_full(project_path: Path, language: str | None = None) -> str:
 
     records = []
     for parser in parsers:
-        records.extend(parser.parse_directory(project_path))
+        records.extend(parser.parse_directory(project_path, path_filter=_path_filter))
     parse_time = time.perf_counter() - t0
 
     t1 = time.perf_counter()
     _conn = db.create_memory_db(records)
     db_time = time.perf_counter() - t1
 
-    # Snapshot mtimes for all registered extensions used
+    # Snapshot mtimes for all registered extensions (pruning excluded dirs)
     extensions = set()
     for parser in parsers:
         extensions.update(parser.file_extensions)
+    exts = tuple(extensions)
 
     _file_mtimes = {}
-    for ext in extensions:
-        for f in sorted(project_path.rglob(f"*{ext}")):
+    for root, dirs, files in os.walk(project_path):
+        root_path = Path(root)
+        if _path_filter is not None:
+            dirs[:] = [d for d in dirs if not _path_filter.is_dir_excluded(root_path / d)]
+        for filename in files:
+            if not filename.endswith(exts):
+                continue
+            f = root_path / filename
             rel = str(f.relative_to(project_path)).replace("\\", "/")
             try:
                 _file_mtimes[rel] = f.stat().st_mtime
@@ -83,12 +93,20 @@ def _index_incremental(project_path: Path) -> tuple[str, bool]:
     t0 = time.perf_counter()
 
     # Collect all registered extensions
-    extensions = set(all_extensions())
+    exts = tuple(all_extensions())
 
-    # Scan current files
+    # Scan current files, pruning excluded directories during walk
     current: dict[str, float] = {}
-    for ext in extensions:
-        for f in sorted(project_path.rglob(f"*{ext}")):
+    for root, dirs, files in os.walk(project_path):
+        root_path = Path(root)
+        if _path_filter is not None:
+            dirs[:] = [d for d in dirs if not _path_filter.is_dir_excluded(root_path / d)]
+        for filename in files:
+            if not filename.endswith(exts):
+                continue
+            f = root_path / filename
+            if _path_filter is not None and _path_filter.is_file_excluded(f):
+                continue
             rel = str(f.relative_to(project_path)).replace("\\", "/")
             try:
                 current[rel] = f.stat().st_mtime
@@ -128,7 +146,7 @@ def _index_incremental(project_path: Path) -> tuple[str, bool]:
     # Parse dirty files
     new_records = []
     for rel in sorted(dirty):
-        full_path = project_path / rel.replace("/", "\\")
+        full_path = project_path / Path(rel)
         suffix = full_path.suffix
         parser = ext_to_parser.get(suffix)
         if parser is None:
@@ -234,6 +252,7 @@ def search(
     query: str,
     n_results: int = 5,
     member_type: str | None = None,
+    file_path: str | None = None,
 ) -> str:
     """Search the indexed API by keyword.
 
@@ -244,17 +263,19 @@ def search(
         query: Search terms (e.g. "MergeService", "BlastBoard", "GridCoord")
         n_results: Max results to return (default 5, max 20)
         member_type: Optional filter — "type", "method", "property", "field", or "event"
+        file_path: Optional path prefix or exact file to scope results
+                   (e.g. "src/services/" or "src/services/foo.ts")
     """
     if _conn is None:
         return "No codebase indexed. Start the server with --project <path>."
 
     global _index_fresh
     n_results = min(max(n_results, 1), 20)
-    results = db.search(_conn, query, n=n_results, member_type=member_type)
+    results = db.search(_conn, query, n=n_results, member_type=member_type, file_path=file_path)
 
     if not results:
         if _auto_reindex():
-            results = db.search(_conn, query, n=n_results, member_type=member_type)
+            results = db.search(_conn, query, n=n_results, member_type=member_type, file_path=file_path)
         if not results:
             return f"No results found for '{query}'. Try broader search terms."
 
@@ -269,7 +290,7 @@ def search(
 
 
 @mcp.tool()
-def get_signature(name: str) -> str:
+def get_signature(name: str, file_path: str | None = None) -> str:
     """Look up the exact signature of an API member by name or FQN.
 
     Use when you need exact parameter types, return types, or method signatures
@@ -277,6 +298,7 @@ def get_signature(name: str) -> str:
 
     Args:
         name: Member name or FQN, e.g. "TryMerge", "CampGame.Services.IMergeService.TryMerge"
+        file_path: Optional path prefix to scope the lookup
     """
     global _index_fresh
     if _conn is None:
@@ -289,9 +311,20 @@ def get_signature(name: str) -> str:
             return _format_record(record)
 
         # 2. Substring match (overloads or partial FQN)
+        # Build optional file_path filter
+        file_clause = ""
+        file_params: list = []
+        if file_path:
+            if file_path.endswith("/"):
+                file_clause = " AND file_path LIKE ?"
+                file_params = [file_path + "%"]
+            else:
+                file_clause = " AND (file_path = ? OR file_path LIKE ?)"
+                file_params = [file_path, file_path + "/%"]
+
         rows = _conn.execute(
-            "SELECT * FROM api_records WHERE fqn LIKE ? ORDER BY fqn",
-            (f"%{name}%",),
+            f"SELECT * FROM api_records WHERE fqn LIKE ?{file_clause} ORDER BY fqn",
+            (f"%{name}%", *file_params),
         ).fetchall()
         if rows:
             parts = [f"Found {len(rows)} match(es) for '{name}':\n"]
@@ -303,7 +336,7 @@ def get_signature(name: str) -> str:
             return "\n".join(parts)
 
         # 3. FTS fallback
-        results = db.search(_conn, name, n=5)
+        results = db.search(_conn, name, n=5, file_path=file_path)
         if results:
             parts = [f"No exact match for '{name}'. Did you mean:\n"]
             for r in results:
@@ -324,7 +357,7 @@ def get_signature(name: str) -> str:
 
 
 @mcp.tool()
-def get_class(class_name: str) -> str:
+def get_class(class_name: str, file_path: str | None = None) -> str:
     """Get a complete reference card for a class — all public members.
 
     Shows every method, property, field, and event with signatures.
@@ -332,19 +365,20 @@ def get_class(class_name: str) -> str:
 
     Args:
         class_name: Class name, e.g. "BlastBoardModel", "IMergeService", "CampGridService"
+        file_path: Optional path prefix to scope the lookup
     """
     global _index_fresh
     if _conn is None:
         return "No codebase indexed. Start the server with --project <path>."
 
     short_name = class_name.rsplit(".", 1)[-1]
-    members = db.get_class_members(_conn, short_name)
+    members = db.get_class_members(_conn, short_name, file_path=file_path)
 
     if not members:
         if _auto_reindex():
-            members = db.get_class_members(_conn, short_name)
+            members = db.get_class_members(_conn, short_name, file_path=file_path)
         if not members:
-            results = db.search(_conn, class_name, n=5, member_type="type")
+            results = db.search(_conn, class_name, n=5, member_type="type", file_path=file_path)
             if results:
                 parts = [f"No class '{class_name}' found. Did you mean:\n"]
                 for r in results:
@@ -468,15 +502,27 @@ def main():
                         help="Path to source directory to index")
     parser.add_argument("--language", default=None,
                         help="Language to parse (e.g. csharp). Auto-detected if omitted.")
+    parser.add_argument("--exclude", default=None,
+                        help="Comma-separated glob patterns to exclude from indexing "
+                             "(e.g. 'tests/**,generated/**')")
+    parser.add_argument("--include-submodules", action="store_true", default=False,
+                        help="Include git submodules in indexing (excluded by default)")
     args, remaining = parser.parse_known_args()
 
-    global _project_path
+    global _project_path, _path_filter
+
+    exclude_globs = [g.strip() for g in args.exclude.split(",")] if args.exclude else []
 
     if args.project:
         _project_path = Path(args.project)
         if not _project_path.is_dir():
             print(f"Warning: Project path not found: {args.project}", file=sys.stderr)
         else:
+            _path_filter = PathFilter(
+                _project_path,
+                exclude_globs=exclude_globs,
+                include_submodules=args.include_submodules,
+            )
             summary = _index_full(_project_path, language=args.language)
             print(summary, file=sys.stderr)
 

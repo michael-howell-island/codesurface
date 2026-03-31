@@ -5,10 +5,15 @@ classes, interfaces, types, enums, namespaces, functions, and their members.
 JSDoc comments (/** ... */) are extracted as summaries.
 """
 
+import os
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .base import BaseParser
+
+if TYPE_CHECKING:
+    from ..filters import PathFilter
 
 
 # --- Skip patterns ---
@@ -149,16 +154,30 @@ class TypeScriptParser(BaseParser):
     def file_extensions(self) -> list[str]:
         return [".ts", ".tsx"]
 
-    def parse_directory(self, directory: Path) -> list[dict]:
-        """Override to skip test/build/node_modules directories."""
+    def parse_directory(
+        self, directory: Path, path_filter: "PathFilter | None" = None
+    ) -> list[dict]:
+        """Override to skip test/build/node_modules directories.
+
+        If path_filter is provided, excluded directories and files are also
+        skipped before the built-in skip rules are applied.
+        """
+        exts = tuple(self.file_extensions)
         records = []
-        for ext in self.file_extensions:
-            for f in sorted(directory.rglob(f"*{ext}")):
-                parts = f.relative_to(directory).parts
-                if any(p in _SKIP_DIRS for p in parts):
+        for root, dirs, files in os.walk(directory):
+            root_path = Path(root)
+            dirs[:] = [
+                d for d in dirs
+                if d not in _SKIP_DIRS
+                and (path_filter is None or not path_filter.is_dir_excluded(root_path / d))
+            ]
+            for filename in files:
+                if not filename.endswith(exts):
                     continue
-                fname = f.name
-                if any(fname.endswith(s) for s in _SKIP_SUFFIXES):
+                if any(filename.endswith(s) for s in _SKIP_SUFFIXES):
+                    continue
+                f = root_path / filename
+                if path_filter is not None and path_filter.is_file_excluded(f):
                     continue
                 try:
                     records.extend(self.parse_file(f, directory))

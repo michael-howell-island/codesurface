@@ -1,7 +1,12 @@
 """Abstract base class for language parsers."""
 
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..filters import PathFilter
 
 
 class BaseParser(ABC):
@@ -14,19 +19,42 @@ class BaseParser(ABC):
     @property
     @abstractmethod
     def file_extensions(self) -> list[str]:
-        """File extensions this parser handles, e.g. [".cs"]."""
+        """File extensions this parser handles, e.g. ['.cs']."""
 
     @abstractmethod
     def parse_file(self, path: Path, base_dir: Path) -> list[dict]:
         """Parse a single file and return API records."""
 
-    def parse_directory(self, directory: Path) -> list[dict]:
-        """Recursively parse all matching files under *directory*."""
+    def parse_directory(
+        self, directory: Path, path_filter: "PathFilter | None" = None
+    ) -> list[dict]:
+        """Recursively parse all matching files under *directory*.
+
+        Uses os.walk so excluded directories (worktrees, submodules) are
+        pruned before descent — rglob cannot prune mid-walk.
+        """
+        exts = tuple(self.file_extensions)
         records = []
-        for ext in self.file_extensions:
-            for f in sorted(directory.rglob(f"*{ext}")):
+
+        for root, dirs, files in os.walk(directory):
+            root_path = Path(root)
+
+            if path_filter is not None:
+                # Prune excluded directories IN PLACE so os.walk skips them
+                dirs[:] = [
+                    d for d in dirs
+                    if not path_filter.is_dir_excluded(root_path / d)
+                ]
+
+            for filename in files:
+                if not filename.endswith(exts):
+                    continue
+                f = root_path / filename
+                if path_filter is not None and path_filter.is_file_excluded(f):
+                    continue
                 try:
                     records.extend(self.parse_file(f, directory))
                 except Exception:
                     continue
+
         return records
