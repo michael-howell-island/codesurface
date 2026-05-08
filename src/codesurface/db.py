@@ -195,6 +195,61 @@ def search(conn: sqlite3.Connection, query: str, n: int = 10,
     return [dict(row) for row in rows]
 
 
+def regex_search(conn: sqlite3.Connection, pattern: str, n: int = 10,
+                 member_type: str | None = None,
+                 file_path: str | None = None,
+                 include_tests: bool = False) -> list[dict]:
+    """Search symbols using a Python regex pattern.
+
+    Matches against fqn, class_name, member_name, and signature columns.
+    Results are ranked: type defs first, then by match position in member_name.
+    """
+    try:
+        compiled = re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        return []
+
+    def _regex_match(value: str) -> bool:
+        return compiled.search(value) is not None if value else False
+
+    conn.create_function("regexp_match", 1, _regex_match)
+
+    clauses = [
+        "(regexp_match(fqn) OR regexp_match(class_name)"
+        " OR regexp_match(member_name) OR regexp_match(signature))"
+    ]
+    params: list = []
+
+    if member_type:
+        clauses.append("member_type = ?")
+        params.append(member_type)
+
+    if file_path:
+        if file_path.endswith("/"):
+            clauses.append("file_path LIKE ?")
+            params.append(file_path + "%")
+        else:
+            clauses.append("(file_path = ? OR file_path LIKE ?)")
+            params.extend([file_path, file_path + "/%"])
+
+    if not include_tests:
+        _add_test_exclusion(clauses, params)
+
+    where = " AND ".join(clauses)
+    params.append(n)
+
+    sql = f"""
+        SELECT *,
+            CASE WHEN member_type = 'type' THEN 0 ELSE 1 END AS _type_rank
+        FROM api_records
+        WHERE {where}
+        ORDER BY _type_rank, member_name, class_name
+        LIMIT ?
+    """
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_by_fqn(conn: sqlite3.Connection, fqn: str) -> dict | None:
     """Exact FQN lookup."""
     row = conn.execute(

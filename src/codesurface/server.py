@@ -362,6 +362,7 @@ def search(
     member_type: str | None = None,
     file_path: str | None = None,
     include_tests: bool = False,
+    regex: bool = False,
 ) -> str:
     """Search the indexed API by keyword.
 
@@ -375,18 +376,22 @@ def search(
         file_path: Optional path prefix or exact file to scope results
                    (e.g. "src/services/" or "src/services/foo.ts")
         include_tests: If true, include test files in results (default false)
+        regex: If true, treat query as a Python regex pattern matched against
+               fqn, class_name, member_name, and signature (default false)
     """
     if _conn is None:
         return "No codebase indexed. Start the server with --project <path>."
 
     global _index_fresh
     n_results = min(max(n_results, 1), 20)
-    results = db.search(_conn, query, n=n_results, member_type=member_type,
+
+    search_fn = db.regex_search if regex else db.search
+    results = search_fn(_conn, query, n=n_results, member_type=member_type,
                         file_path=file_path, include_tests=include_tests)
 
     if not results:
         if _auto_reindex():
-            results = db.search(_conn, query, n=n_results, member_type=member_type,
+            results = search_fn(_conn, query, n=n_results, member_type=member_type,
                                 file_path=file_path, include_tests=include_tests)
         if not results:
             if _json_mode():

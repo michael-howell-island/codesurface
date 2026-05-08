@@ -223,6 +223,56 @@ class TestReindexJson:
         assert "No project path" in result
 
 
+class TestRegexSearch:
+    def setup_method(self):
+        _setup()
+        self._old_format = server._output_format
+        server._output_format = "json"
+
+    def teardown_method(self):
+        server._output_format = self._old_format
+
+    def test_regex_finds_by_pattern(self):
+        result = server.search("My.*ss", regex=True)
+        data = json.loads(result)
+        assert data["count"] > 0
+        assert any("MyClass" in r["class_name"] for r in data["results"])
+
+    def test_regex_case_insensitive(self):
+        result = server.search("myclass", regex=True)
+        data = json.loads(result)
+        assert data["count"] > 0
+
+    def test_regex_no_match(self):
+        result = server.search("^zzz_nonexistent$", regex=True)
+        data = json.loads(result)
+        assert data["count"] == 0
+        assert data["results"] == []
+
+    def test_regex_invalid_pattern(self):
+        result = server.search("[invalid", regex=True)
+        data = json.loads(result)
+        assert data["count"] == 0
+
+    def test_regex_matches_signature(self):
+        result = server.search(r"void\s+foo", regex=True)
+        data = json.loads(result)
+        assert data["count"] > 0
+        assert any("foo" in r["member_name"] for r in data["results"])
+
+    def test_regex_with_member_type_filter(self):
+        result = server.search("MyClass", regex=True, member_type="type")
+        data = json.loads(result)
+        assert data["count"] > 0
+        assert all(r["member_type"] == "type" for r in data["results"])
+
+    def test_regex_with_file_path_filter(self):
+        result = server.search("MyClass", regex=True, file_path="src/")
+        data = json.loads(result)
+        assert data["count"] > 0
+        assert all(r["file_path"].startswith("src/") for r in data["results"])
+
+
 class TestTextModeUnchanged:
     """Verify text mode still works the same when _output_format='text'."""
 
