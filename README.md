@@ -39,36 +39,52 @@ Restart your AI tool and ask: *"What methods does MyService have?"*
 
 ## CLAUDE.md Snippet
 
-Add this to your project's `CLAUDE.md` (or equivalent instructions file). **This step is important.** Without it, the AI has the tools but won't know when to reach for them.
+Add this to your project's `CLAUDE.md` (or equivalent instructions file). **This step is critical for adoption.** Without it, the AI has the tools but defaults to Grep/Read instead.
 
 ````markdown
-## Codebase API Lookup (codesurface MCP)
+## codesurface — symbol discovery (use BEFORE Grep/Read)
 
-Use codesurface MCP tools BEFORE Grep, Glob, Read, or Task (subagents) for any class/method/field lookup. This applies to you AND any subagents you spawn.
+**When you need to find a class, interface, method, or type — use codesurface search, not Grep.**
+A codesurface search returns ranked results with full signatures, parameter types, return types,
+and exact file:line locations. One call gives you a working mental model of a class without
+opening the file. Grep returns raw file content that costs 5-12x more tokens.
 
-| Tool | Use when | Example |
-|------|----------|---------|
-| `search` | Find APIs by keyword | `search("MergeService")` |
-| `get_signature` | Need exact signature | `get_signature("TryMerge")` |
-| `get_class` | See all members on a class | `get_class("BlastBoardModel")` |
-| `get_stats` | Codebase overview | `get_stats()` |
+**Workflow — follow this order:**
 
-Every result includes file path + line numbers. Use them for targeted reads:
-- `File: Service.cs:32` → `Read("Service.cs", offset=32, limit=15)`
-- `File: Converter.java:504-506` → `Read("Converter.java", offset=504, limit=10)`
+1. `search("keyword")` → find the symbol (returns file path + line number)
+2. `get_class("ClassName")` → see all members if you need the full API surface
+3. `get_signature("methodName")` → get exact params + return type
+4. `Read(file, offset=line, limit=15)` → only now read the implementation if needed
 
-Never read a full file when you have a line number. Only fall back to Grep/Read for implementation details (method bodies, control flow).
+For pattern-based discovery, use regex: `search("I.*Service$", regex=True)`
+
+**Never skip to Grep/Read when codesurface can answer the question.** Fall back to Grep only for:
+string literals, configuration values, usage patterns across files, or when codesurface returns no results.
+
+This applies to you AND any subagents you spawn.
 ````
 
 ## Tools
 
 | Tool | Purpose | Example |
 |------|---------|---------|
-| `search` | Find APIs by keyword | "MergeService", "BlastBoard", "GridCoord" |
+| `search` | Find APIs by keyword or regex | `search("MergeService")`, `search("I.*Service$", regex=True)` |
 | `get_signature` | Exact signature by name or FQN | "TryMerge", "CampGame.Services.IMergeService.TryMerge" |
 | `get_class` | Full class reference card — all public members | "BlastBoardModel" → all methods/fields/properties |
 | `get_stats` | Overview of indexed codebase | File count, record counts, namespace breakdown |
 | `reindex` | Incremental index update (mtime-based) | Only re-parses changed/new/deleted files. Also runs automatically on query misses |
+
+### Regex Search
+
+Pass `regex=True` to treat the query as a Python regex pattern, matched case-insensitively against `fqn`, `class_name`, `member_name`, and `signature`:
+
+```
+search("I.*Service$", regex=True)                    # all interfaces ending in Service
+search("get(User|Account)", regex=True, member_type="method")  # specific getter methods
+search("constructor.*ILog", regex=True)               # classes injecting ILog
+```
+
+All standard filters (`member_type`, `file_path`, `include_tests`, `n_results`) work with regex mode.
 
 ## Tested On
 
